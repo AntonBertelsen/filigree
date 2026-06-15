@@ -1,0 +1,14 @@
+# Build directories
+build/
+out/
+bin/
+obj/
+
+# IDE directories
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local package manager files
+external/vcpkg/
