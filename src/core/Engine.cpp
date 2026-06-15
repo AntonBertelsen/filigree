@@ -30,12 +30,22 @@ Engine::Engine() {
     lucyNode->setPosition(glm::vec3(0.0f, -0.8f, 0.0f));
     lucyNode->setScale(glm::vec3(0.002f));
     rootNode->addChild(std::move(lucy));
+
+    // Load Torus Knot OBJ Mesh Model
+    std::cout << "Loading Torus Knot model..." << std::endl;
+    auto torus = std::make_unique<MeshNode>("assets/models/torus_knot.obj");
+    torusNode = torus.get();
+    torusNode->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    torusNode->setScale(glm::vec3(0.25f));
+    rootNode->addChild(std::move(torus));
     
     // Upload meshes to GPU using VMA
     std::cout << "Uploading Bunny mesh to GPU..." << std::endl;
     uploadMesh(*bunnyNode, bunnyMesh);
     std::cout << "Uploading Lucy mesh to GPU..." << std::endl;
     uploadMesh(*lucyNode, lucyMesh);
+    std::cout << "Uploading Torus Knot mesh to GPU..." << std::endl;
+    uploadMesh(*torusNode, torusMesh);
     
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
@@ -71,11 +81,19 @@ void Engine::mainLoop() {
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
 
-        // Poll Tab key to toggle between Bunny and Lucy
+        // Poll Tab key to toggle between models: Bunny -> Lucy -> Torus Knot -> Bunny
         bool currentTabState = (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
         if (currentTabState && !tabWasPressed) {
-            showLucy = !showLucy;
-            std::cout << "Active model switched to: " << (showLucy ? "Lucy" : "Bunny") << std::endl;
+            if (activeModel == ModelType::Bunny) {
+                activeModel = ModelType::Lucy;
+                std::cout << "Active model switched to: Lucy" << std::endl;
+            } else if (activeModel == ModelType::Lucy) {
+                activeModel = ModelType::TorusKnot;
+                std::cout << "Active model switched to: Torus Knot" << std::endl;
+            } else {
+                activeModel = ModelType::Bunny;
+                std::cout << "Active model switched to: Bunny" << std::endl;
+            }
         }
         tabWasPressed = currentTabState;
 
@@ -98,6 +116,7 @@ void Engine::cleanup() {
     cameraNode = nullptr;
     bunnyNode = nullptr;
     lucyNode = nullptr;
+    torusNode = nullptr;
 
     // Release GPU Mesh buffers
     if (context) {
@@ -117,6 +136,14 @@ void Engine::cleanup() {
         if (lucyMesh.indexBuffer != VK_NULL_HANDLE) {
             vmaDestroyBuffer(allocator, lucyMesh.indexBuffer, lucyMesh.indexAllocation);
             lucyMesh.indexBuffer = VK_NULL_HANDLE;
+        }
+        if (torusMesh.vertexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, torusMesh.vertexBuffer, torusMesh.vertexAllocation);
+            torusMesh.vertexBuffer = VK_NULL_HANDLE;
+        }
+        if (torusMesh.indexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, torusMesh.indexBuffer, torusMesh.indexAllocation);
+            torusMesh.indexBuffer = VK_NULL_HANDLE;
         }
     }
 
@@ -229,16 +256,34 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
     // 5. Push Combined MVP Matrix
     float aspect = static_cast<float>(context->getSwapChainExtent().width) / static_cast<float>(context->getSwapChainExtent().height);
     glm::mat4 viewProj = cameraNode->getProjectionMatrix(aspect) * cameraNode->getViewMatrix();
-    glm::mat4 modelMatrix = showLucy ? lucyNode->getWorldMatrix() : bunnyNode->getWorldMatrix();
+    
+    glm::mat4 modelMatrix;
+    VkBuffer activeVertexBuffer;
+    VkBuffer activeIndexBuffer;
+    uint32_t activeIndexCount;
+
+    if (activeModel == ModelType::Bunny) {
+        modelMatrix = bunnyNode->getWorldMatrix();
+        activeVertexBuffer = bunnyMesh.vertexBuffer;
+        activeIndexBuffer = bunnyMesh.indexBuffer;
+        activeIndexCount = bunnyMesh.indexCount;
+    } else if (activeModel == ModelType::Lucy) {
+        modelMatrix = lucyNode->getWorldMatrix();
+        activeVertexBuffer = lucyMesh.vertexBuffer;
+        activeIndexBuffer = lucyMesh.indexBuffer;
+        activeIndexCount = lucyMesh.indexCount;
+    } else {
+        modelMatrix = torusNode->getWorldMatrix();
+        activeVertexBuffer = torusMesh.vertexBuffer;
+        activeIndexBuffer = torusMesh.indexBuffer;
+        activeIndexCount = torusMesh.indexCount;
+    }
+
     glm::mat4 mvp = viewProj * modelMatrix;
     pipeline->pushConstants(cb, mvp);
 
     // 6. Bind Vertex and Index Buffers
     VkDeviceSize offsets[] = {0};
-    VkBuffer activeVertexBuffer = showLucy ? lucyMesh.vertexBuffer : bunnyMesh.vertexBuffer;
-    VkBuffer activeIndexBuffer = showLucy ? lucyMesh.indexBuffer : bunnyMesh.indexBuffer;
-    uint32_t activeIndexCount = showLucy ? lucyMesh.indexCount : bunnyMesh.indexCount;
-
     vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
     vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 

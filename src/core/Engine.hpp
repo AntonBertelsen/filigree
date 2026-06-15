@@ -41,6 +41,7 @@ private:
     CameraNode* cameraNode = nullptr;
     MeshNode* bunnyNode = nullptr;
     MeshNode* lucyNode = nullptr;
+    MeshNode* torusNode = nullptr;
 
     // GPU representation of loaded meshes
     struct GPUMesh {
@@ -53,7 +54,14 @@ private:
 
     GPUMesh bunnyMesh;
     GPUMesh lucyMesh;
-    bool showLucy = false;
+    GPUMesh torusMesh;
+
+    enum class ModelType {
+        Bunny,
+        Lucy,
+        TorusKnot
+    };
+    ModelType activeModel = ModelType::Bunny;
     bool tabWasPressed = false;
 
     void uploadMesh(const MeshNode& meshNode, GPUMesh& gpuMesh);
