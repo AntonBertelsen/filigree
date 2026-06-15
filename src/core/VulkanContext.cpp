@@ -1,3 +1,4 @@
+#define VMA_IMPLEMENTATION
 #include "VulkanContext.hpp"
 
 #include <iostream>
@@ -34,6 +35,18 @@ void VulkanContext::initVulkan() {
     createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
+
+    // Initialize VMA allocator
+    VmaAllocatorCreateInfo allocatorInfo{};
+    allocatorInfo.physicalDevice = physicalDevice;
+    allocatorInfo.device = device;
+    allocatorInfo.instance = instance;
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+
+    if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VmaAllocator!");
+    }
+
     createSwapChain();
     createImageViews();
     createCommandPool();
@@ -74,6 +87,12 @@ void VulkanContext::cleanup() {
         // 4. Swapchain
         if (swapChain != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device, swapChain, nullptr);
+        }
+
+        // Destroy VMA Allocator before device
+        if (allocator != VK_NULL_HANDLE) {
+            vmaDestroyAllocator(allocator);
+            allocator = VK_NULL_HANDLE;
         }
 
         // 5. Logical device
@@ -520,4 +539,64 @@ void VulkanContext::createSyncObjects() {
     }
 
     std::cout << "Successfully created Vulkan synchronization objects for double buffering!" << std::endl;
+}
+
+void VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocFlags, VkBuffer& buffer, VmaAllocation& allocation) {
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = memoryUsage;
+    allocInfo.flags = allocFlags;
+
+    if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VMA buffer!");
+    }
+}
+
+VkCommandBuffer VulkanContext::beginSingleTimeCommands() {
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(device, &allocInfo, &cb);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(cb, &beginInfo);
+    return cb;
+}
+
+void VulkanContext::endSingleTimeCommands(VkCommandBuffer cb) {
+    vkEndCommandBuffer(cb);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cb;
+
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+
+    vkFreeCommandBuffers(device, commandPool, 1, &cb);
+}
+
+void VulkanContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    VkCommandBuffer cb = beginSingleTimeCommands();
+
+    VkBufferCopy copyRegion{};
+    copyRegion.srcOffset = 0;
+    copyRegion.dstOffset = 0;
+    copyRegion.size = size;
+    vkCmdCopyBuffer(cb, srcBuffer, dstBuffer, 1, &copyRegion);
+
+    endSingleTimeCommands(cb);
 }

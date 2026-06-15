@@ -2,6 +2,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <vk_mem_alloc.h>
 
 #include <vector>
 #include <string>
@@ -31,6 +32,15 @@ public:
     const std::vector<VkImageView>& getSwapChainImageViews() const { return swapChainImageViews; }
 
     VkCommandPool getCommandPool() const { return commandPool; }
+    VmaAllocator getAllocator() const { return allocator; }
+
+    // Buffer helpers (using VMA)
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocFlags, VkBuffer& buffer, VmaAllocation& allocation);
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+    
+    // Command submission helpers for transfer operations
+    VkCommandBuffer beginSingleTimeCommands();
+    void endSingleTimeCommands(VkCommandBuffer cb);
     
     // Double buffering accessors
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -121,4 +131,5 @@ private:
     std::vector<VkFence> inFlightFences;
 
     uint32_t currentFrame = 0;
+    VmaAllocator allocator = VK_NULL_HANDLE;
 };

@@ -14,6 +14,8 @@ find_package(Vulkan REQUIRED)
 # vcpkg automatically hooks find_package for glfw3 and glm.
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(tinyobjloader CONFIG REQUIRED)
 
 # 3. Collect source files
 # It's cleaner to explicitly list files rather than globbing, so CMake knows when files are added/removed.
@@ -27,6 +29,8 @@ set(SOURCES
     src/scene/Node.cpp
     src/scene/CameraNode.hpp
     src/scene/CameraNode.cpp
+    src/scene/MeshNode.hpp
+    src/scene/MeshNode.cpp
     src/renderer/StandardPipeline.hpp
     src/renderer/StandardPipeline.cpp
 )
@@ -48,6 +52,8 @@ target_link_libraries(filigree PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
+    GPUOpen::VulkanMemoryAllocator
+    tinyobjloader::tinyobjloader
 )
 
 # Configure output directories to keep the build directory tidy

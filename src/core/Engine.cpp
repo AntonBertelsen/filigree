@@ -13,7 +13,29 @@ Engine::Engine() {
     
     auto camera = std::make_unique<CameraNode>();
     cameraNode = camera.get();
-    rootNode->addChild(std::move(camera)); // Transfer ownership to rootNode
+    rootNode->addChild(std::move(camera));
+    
+    // Load Stanford Bunny OBJ Mesh Model
+    std::cout << "Loading Bunny model..." << std::endl;
+    auto bunny = std::make_unique<MeshNode>("assets/models/bunny.obj");
+    bunnyNode = bunny.get();
+    bunnyNode->setPosition(glm::vec3(0.0f, -0.7f, 0.0f));
+    bunnyNode->setScale(glm::vec3(1.0f));
+    rootNode->addChild(std::move(bunny));
+    
+    // Load Stanford Lucy OBJ Mesh Model
+    std::cout << "Loading Lucy model..." << std::endl;
+    auto lucy = std::make_unique<MeshNode>("assets/models/lucy.obj");
+    lucyNode = lucy.get();
+    lucyNode->setPosition(glm::vec3(0.0f, -0.8f, 0.0f));
+    lucyNode->setScale(glm::vec3(0.002f));
+    rootNode->addChild(std::move(lucy));
+    
+    // Upload meshes to GPU using VMA
+    std::cout << "Uploading Bunny mesh to GPU..." << std::endl;
+    uploadMesh(*bunnyNode, bunnyMesh);
+    std::cout << "Uploading Lucy mesh to GPU..." << std::endl;
+    uploadMesh(*lucyNode, lucyMesh);
     
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
@@ -49,6 +71,14 @@ void Engine::mainLoop() {
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
 
+        // Poll Tab key to toggle between Bunny and Lucy
+        bool currentTabState = (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
+        if (currentTabState && !tabWasPressed) {
+            showLucy = !showLucy;
+            std::cout << "Active model switched to: " << (showLucy ? "Lucy" : "Bunny") << std::endl;
+        }
+        tabWasPressed = currentTabState;
+
         // Update Camera and Scene Graph
         // Note: cameraNode is updated directly since it polls input
         cameraNode->update(deltaTime, window);
@@ -66,6 +96,29 @@ void Engine::cleanup() {
     // Release scene graph before Vulkan cleanup
     rootNode.reset();
     cameraNode = nullptr;
+    bunnyNode = nullptr;
+    lucyNode = nullptr;
+
+    // Release GPU Mesh buffers
+    if (context) {
+        VmaAllocator allocator = context->getAllocator();
+        if (bunnyMesh.vertexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, bunnyMesh.vertexBuffer, bunnyMesh.vertexAllocation);
+            bunnyMesh.vertexBuffer = VK_NULL_HANDLE;
+        }
+        if (bunnyMesh.indexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, bunnyMesh.indexBuffer, bunnyMesh.indexAllocation);
+            bunnyMesh.indexBuffer = VK_NULL_HANDLE;
+        }
+        if (lucyMesh.vertexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, lucyMesh.vertexBuffer, lucyMesh.vertexAllocation);
+            lucyMesh.vertexBuffer = VK_NULL_HANDLE;
+        }
+        if (lucyMesh.indexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, lucyMesh.indexBuffer, lucyMesh.indexAllocation);
+            lucyMesh.indexBuffer = VK_NULL_HANDLE;
+        }
+    }
 
     // Release pipeline and context
     pipeline.reset();
@@ -147,13 +200,24 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
     scissor.extent = context->getSwapChainExtent();
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
-    // 5. Push Camera View-Projection Matrix
+    // 5. Push Combined MVP Matrix
     float aspect = static_cast<float>(context->getSwapChainExtent().width) / static_cast<float>(context->getSwapChainExtent().height);
     glm::mat4 viewProj = cameraNode->getProjectionMatrix(aspect) * cameraNode->getViewMatrix();
-    pipeline->pushConstants(cb, viewProj);
+    glm::mat4 modelMatrix = showLucy ? lucyNode->getWorldMatrix() : bunnyNode->getWorldMatrix();
+    glm::mat4 mvp = viewProj * modelMatrix;
+    pipeline->pushConstants(cb, mvp);
 
-    // 6. Draw the Triangle!
-    vkCmdDraw(cb, 3, 1, 0, 0);
+    // 6. Bind Vertex and Index Buffers
+    VkDeviceSize offsets[] = {0};
+    VkBuffer activeVertexBuffer = showLucy ? lucyMesh.vertexBuffer : bunnyMesh.vertexBuffer;
+    VkBuffer activeIndexBuffer = showLucy ? lucyMesh.indexBuffer : bunnyMesh.indexBuffer;
+    uint32_t activeIndexCount = showLucy ? lucyMesh.indexCount : bunnyMesh.indexCount;
+
+    vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
+    vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // 7. Draw the Mesh!
+    vkCmdDrawIndexed(cb, activeIndexCount, 1, 0, 0, 0);
 
     // 7. End Dynamic Rendering
     vkCmdEndRendering(cb);
@@ -265,4 +329,71 @@ void Engine::drawFrame() {
 
     // 7. Advance frame index
     context->advanceFrame();
+}
+
+void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
+    VulkanContext& ctx = *context;
+    
+    // 1. Vertex Buffer
+    VkDeviceSize vertexBufferSize = sizeof(MeshVertex) * mesh.getVertices().size();
+    
+    VkBuffer stagingVertexBuffer;
+    VmaAllocation stagingVertexAllocation;
+    ctx.createBuffer(
+        vertexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_MEMORY_USAGE_AUTO,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        stagingVertexBuffer,
+        stagingVertexAllocation
+    );
+    
+    void* vertexData;
+    vmaMapMemory(ctx.getAllocator(), stagingVertexAllocation, &vertexData);
+    memcpy(vertexData, mesh.getVertices().data(), vertexBufferSize);
+    vmaUnmapMemory(ctx.getAllocator(), stagingVertexAllocation);
+    
+    ctx.createBuffer(
+        vertexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        0,
+        gpuMesh.vertexBuffer,
+        gpuMesh.vertexAllocation
+    );
+    
+    ctx.copyBuffer(stagingVertexBuffer, gpuMesh.vertexBuffer, vertexBufferSize);
+    vmaDestroyBuffer(ctx.getAllocator(), stagingVertexBuffer, stagingVertexAllocation);
+    
+    // 2. Index Buffer
+    VkDeviceSize indexBufferSize = sizeof(uint32_t) * mesh.getIndices().size();
+    gpuMesh.indexCount = static_cast<uint32_t>(mesh.getIndices().size());
+    
+    VkBuffer stagingIndexBuffer;
+    VmaAllocation stagingIndexAllocation;
+    ctx.createBuffer(
+        indexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_MEMORY_USAGE_AUTO,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        stagingIndexBuffer,
+        stagingIndexAllocation
+    );
+    
+    void* indexData;
+    vmaMapMemory(ctx.getAllocator(), stagingIndexAllocation, &indexData);
+    memcpy(indexData, mesh.getIndices().data(), indexBufferSize);
+    vmaUnmapMemory(ctx.getAllocator(), stagingIndexAllocation);
+    
+    ctx.createBuffer(
+        indexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        0,
+        gpuMesh.indexBuffer,
+        gpuMesh.indexAllocation
+    );
+    
+    ctx.copyBuffer(stagingIndexBuffer, gpuMesh.indexBuffer, indexBufferSize);
+    vmaDestroyBuffer(ctx.getAllocator(), stagingIndexBuffer, stagingIndexAllocation);
 }

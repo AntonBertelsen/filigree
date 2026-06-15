@@ -3,6 +3,7 @@
 #include "VulkanContext.hpp"
 #include "scene/Node.hpp"
 #include "scene/CameraNode.hpp"
+#include "scene/MeshNode.hpp"
 #include "renderer/StandardPipeline.hpp"
 
 #include <memory>
@@ -38,6 +39,24 @@ private:
     // Scene Graph
     std::unique_ptr<Node> rootNode;
     CameraNode* cameraNode = nullptr;
+    MeshNode* bunnyNode = nullptr;
+    MeshNode* lucyNode = nullptr;
+
+    // GPU representation of loaded meshes
+    struct GPUMesh {
+        VkBuffer vertexBuffer = VK_NULL_HANDLE;
+        VmaAllocation vertexAllocation = VK_NULL_HANDLE;
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VmaAllocation indexAllocation = VK_NULL_HANDLE;
+        uint32_t indexCount = 0;
+    };
+
+    GPUMesh bunnyMesh;
+    GPUMesh lucyMesh;
+    bool showLucy = false;
+    bool tabWasPressed = false;
+
+    void uploadMesh(const MeshNode& meshNode, GPUMesh& gpuMesh);
 
     // Frame timing
     float lastFrameTime = 0.0f;
