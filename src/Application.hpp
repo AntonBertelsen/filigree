@@ -37,6 +37,15 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;  // Explicitly destroyed
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;      // Explicitly destroyed
 
+    // Command allocation handles
+    VkCommandPool commandPool = VK_NULL_HANDLE;        // Explicitly destroyed
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;    // Implicitly destroyed with commandPool
+
+    // CPU-GPU Synchronization handles
+    VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE; // Explicitly destroyed
+    VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE; // Explicitly destroyed
+    VkFence inFlightFence = VK_NULL_HANDLE;            // Explicitly destroyed
+
     // Struct to store indices of the Queue Families we need
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphicsFamily;
@@ -83,4 +92,10 @@ private:
     void createGraphicsPipeline();
     VkShaderModule createShaderModule(const std::vector<char>& code);
     static std::vector<char> readFile(const std::string& filename);
+
+    void createCommandPool();
+    void createCommandBuffer();
+    void createSyncObjects();
+    void drawFrame();
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 };
