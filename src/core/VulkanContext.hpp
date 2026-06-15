@@ -30,6 +30,10 @@ public:
     VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
     VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
     const std::vector<VkImageView>& getSwapChainImageViews() const { return swapChainImageViews; }
+    
+    VkImageView getDepthImageView() const { return depthImageView; }
+    VkFormat getDepthFormat() const { return depthFormat; }
+    VkImage getDepthImage() const { return depthImage; }
 
     VkCommandPool getCommandPool() const { return commandPool; }
     VmaAllocator getAllocator() const { return allocator; }
@@ -99,6 +103,7 @@ private:
     
     void createSwapChain();
     void createImageViews();
+    void createDepthResources();
     void createCommandPool();
     void createCommandBuffers();
     void createSyncObjects();
@@ -120,6 +125,12 @@ private:
     VkFormat swapChainImageFormat;
     VkExtent2D swapChainExtent;
     std::vector<VkImageView> swapChainImageViews;
+
+    // Depth buffer handles
+    VkImage depthImage = VK_NULL_HANDLE;
+    VmaAllocation depthImageAllocation = VK_NULL_HANDLE;
+    VkImageView depthImageView = VK_NULL_HANDLE;
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
     // Command Pool
     VkCommandPool commandPool = VK_NULL_HANDLE;

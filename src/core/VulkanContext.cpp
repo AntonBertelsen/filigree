@@ -49,6 +49,7 @@ void VulkanContext::initVulkan() {
 
     createSwapChain();
     createImageViews();
+    createDepthResources();
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
@@ -87,6 +88,17 @@ void VulkanContext::cleanup() {
         // 4. Swapchain
         if (swapChain != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device, swapChain, nullptr);
+        }
+
+        // Destroy depth resources
+        if (depthImageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, depthImageView, nullptr);
+            depthImageView = VK_NULL_HANDLE;
+        }
+        if (depthImage != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator, depthImage, depthImageAllocation);
+            depthImage = VK_NULL_HANDLE;
+            depthImageAllocation = VK_NULL_HANDLE;
         }
 
         // Destroy VMA Allocator before device
@@ -599,4 +611,46 @@ void VulkanContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceS
     vkCmdCopyBuffer(cb, srcBuffer, dstBuffer, 1, &copyRegion);
 
     endSingleTimeCommands(cb);
+}
+
+void VulkanContext::createDepthResources() {
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = swapChainExtent.width;
+    imageInfo.extent.height = swapChainExtent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = depthFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = 0;
+
+    if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &depthImage, &depthImageAllocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth image via VMA!");
+    }
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &depthImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth image view!");
+    }
+
+    std::cout << "Successfully created depth resources (format " << depthFormat << ")!" << std::endl;
 }
