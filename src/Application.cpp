@@ -41,6 +41,8 @@ void Application::initWindow() {
 
 void Application::initVulkan() {
     createInstance();
+    pickPhysicalDevice();
+    createLogicalDevice();
 }
 
 void Application::mainLoop() {
@@ -52,6 +54,10 @@ void Application::mainLoop() {
 
 void Application::cleanup() {
     // Clean up Vulkan resources (in reverse order of creation)
+    if (device != VK_NULL_HANDLE) {
+        vkDestroyDevice(device, nullptr);
+    }
+
     if (instance != VK_NULL_HANDLE) {
         vkDestroyInstance(instance, nullptr);
     }
@@ -140,4 +146,102 @@ bool Application::checkValidationLayerSupport() {
     }
 
     return true;
+}
+
+void Application::pickPhysicalDevice() {
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0) {
+        throw std::runtime_error("Failed to find GPUs with Vulkan support!");
+    }
+
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    for (const auto& dev : devices) {
+        if (isDeviceSuitable(dev)) {
+            physicalDevice = dev;
+            break;
+        }
+    }
+
+    if (physicalDevice == VK_NULL_HANDLE) {
+        throw std::runtime_error("Failed to find a suitable GPU!");
+    }
+
+    // Print out the chosen GPU name for verification
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+    std::cout << "Selected GPU: " << deviceProperties.deviceName << std::endl;
+}
+
+void Application::createLogicalDevice() {
+    QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+
+    VkDeviceQueueCreateInfo queueCreateInfo{};
+    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
+    queueCreateInfo.queueCount = 1;
+
+    float queuePriority = 1.0f;
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+
+    // We do not require any specialized physical device features yet
+    VkPhysicalDeviceFeatures deviceFeatures{};
+
+    VkDeviceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.queueCreateInfoCount = 1;
+    createInfo.pQueueCreateInfos = &queueCreateInfo;
+    createInfo.pEnabledFeatures = &deviceFeatures;
+
+    // Enable device extensions (none needed yet, but we will add Swapchain here in Phase 3)
+    createInfo.enabledExtensionCount = 0;
+
+    // Modern Vulkan ignores device-specific validation layers (they are now deprecated).
+    // The specification requires enabledLayerCount to be set to 0.
+    createInfo.enabledLayerCount = 0;
+    createInfo.ppEnabledLayerNames = nullptr;
+
+    VkResult result = vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan logical device! Error code: " + std::to_string(result));
+    }
+
+    // Retrieve the graphics queue handle
+    vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+
+    std::cout << "Successfully created Vulkan logical device!" << std::endl;
+}
+
+bool Application::isDeviceSuitable(VkPhysicalDevice dev) {
+    QueueFamilyIndices indices = findQueueFamilies(dev);
+    return indices.isComplete();
+}
+
+Application::QueueFamilyIndices Application::findQueueFamilies(VkPhysicalDevice dev) {
+    QueueFamilyIndices indices;
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(dev, &queueFamilyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(dev, &queueFamilyCount, queueFamilies.data());
+
+    int i = 0;
+    for (const auto& queueFamily : queueFamilies) {
+        // Find a queue family that supports graphics commands
+        if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            indices.graphicsFamily = i;
+        }
+
+        if (indices.isComplete()) {
+            break;
+        }
+
+        i++;
+    }
+
+    return indices;
 }
