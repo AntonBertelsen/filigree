@@ -34,6 +34,8 @@ private:
     VkFormat swapChainImageFormat;
     VkExtent2D swapChainExtent;
     std::vector<VkImageView> swapChainImageViews;     // Explicitly destroyed
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;  // Explicitly destroyed
+    VkPipeline graphicsPipeline = VK_NULL_HANDLE;      // Explicitly destroyed
 
     // Struct to store indices of the Queue Families we need
     struct QueueFamilyIndices {
@@ -77,4 +79,8 @@ private:
     VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
     void createSwapChain();
     void createImageViews();
+
+    void createGraphicsPipeline();
+    VkShaderModule createShaderModule(const std::vector<char>& code);
+    static std::vector<char> readFile(const std::string& filename);
 };

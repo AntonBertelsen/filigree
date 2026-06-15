@@ -46,3 +46,41 @@ target_link_libraries(filigree PRIVATE
 set_target_properties(filigree PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 7. Shader Compilation
+# Find glslc compiler (part of the Vulkan SDK)
+if(NOT Vulkan_GLSLC_EXECUTABLE)
+    message(FATAL_ERROR "glslc shader compiler not found! Make sure the Vulkan SDK is installed.")
+endif()
+
+# We want the compiled shaders to end up next to our executable in the build directory.
+set(SHADER_SPV_OUTPUTS
+    "${CMAKE_BINARY_DIR}/bin/shaders/vert.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
+)
+
+# Create output shader directory in the build folder
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin/shaders")
+
+# Custom command to compile vertex shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/vert.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.vert" -o "${CMAKE_BINARY_DIR}/bin/shaders/vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.vert"
+    COMMENT "Compiling vertex shader to SPIR-V..."
+)
+
+# Custom command to compile fragment shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag"
+    COMMENT "Compiling fragment shader to SPIR-V..."
+)
+
+# Create a target for shaders that our main executable depends on
+add_custom_target(compile_shaders DEPENDS ${SHADER_SPV_OUTPUTS})
+add_dependencies(filigree compile_shaders)
+
+# Define preprocessor macro pointing to the compiled shaders directory for C++ code
+target_compile_definitions(filigree PRIVATE SHADERS_DIR="${CMAKE_BINARY_DIR}/bin/shaders/")
