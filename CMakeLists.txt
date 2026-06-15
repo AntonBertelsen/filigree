@@ -19,8 +19,16 @@ find_package(glm CONFIG REQUIRED)
 # It's cleaner to explicitly list files rather than globbing, so CMake knows when files are added/removed.
 set(SOURCES
     src/main.cpp
-    src/Application.hpp
-    src/Application.cpp
+    src/core/VulkanContext.hpp
+    src/core/VulkanContext.cpp
+    src/core/Engine.hpp
+    src/core/Engine.cpp
+    src/scene/Node.hpp
+    src/scene/Node.cpp
+    src/scene/CameraNode.hpp
+    src/scene/CameraNode.cpp
+    src/renderer/StandardPipeline.hpp
+    src/renderer/StandardPipeline.cpp
 )
 
 # 4. Define our executable target
