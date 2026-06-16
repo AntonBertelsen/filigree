@@ -38,4 +38,8 @@ private:
     double lastX = 400.0;
     double lastY = 300.0;
     bool firstMouse = true;
+
+    // Orbit Camera variables
+    glm::vec3 target{0.0f, 0.0f, 0.0f};
+    float radius = 3.0f;
 };
