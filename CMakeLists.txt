@@ -37,6 +37,15 @@ set(SOURCES
     src/renderer/StandardPipeline.cpp
     src/renderer/CullPipeline.hpp
     src/renderer/CullPipeline.cpp
+    src/renderer/MeshletBuilder.hpp
+    src/renderer/MeshletBuilder.cpp
+    src/core/GPUMesh.hpp
+    src/core/GPUMeshUploader.hpp
+    src/core/GPUMeshUploader.cpp
+    src/core/InputController.hpp
+    src/core/InputController.cpp
+    src/renderer/VulkanRenderer.hpp
+    src/renderer/VulkanRenderer.cpp
 )
 
 # 4. Define our executable target

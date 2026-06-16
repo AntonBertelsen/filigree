@@ -6,11 +6,15 @@
 #include "scene/MeshNode.hpp"
 #include "renderer/StandardPipeline.hpp"
 #include "renderer/CullPipeline.hpp"
+#include "core/GPUMesh.hpp"
 
 #include <memory>
 #include <vector>
 #include <string>
 
+// Forward declarations
+class VulkanRenderer;
+class InputController;
 
 class Engine {
 public:
@@ -27,13 +31,14 @@ public:
     void recreateSwapChain();
     void handleWindowRefresh();
 
+    // Grant access to sub-systems
+    friend class VulkanRenderer;
+    friend class InputController;
+
 private:
     void initWindow();
     void mainLoop();
     void cleanup();
-
-    void drawFrame();
-    void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
 
     // Window configuration
     const uint32_t WIDTH = 800;
@@ -44,6 +49,8 @@ private:
     std::unique_ptr<VulkanContext> context;
     std::unique_ptr<StandardPipeline> pipeline;
     std::unique_ptr<CullPipeline> cullPipeline;
+    std::unique_ptr<VulkanRenderer> renderer;
+    std::unique_ptr<InputController> inputController;
 
     // Descriptor resources for compute
     VkDescriptorPool computeDescriptorPool = VK_NULL_HANDLE;
@@ -51,35 +58,6 @@ private:
     // Scene Graph
     std::unique_ptr<Node> rootNode;
     CameraNode* cameraNode = nullptr;
-
-    // GPU representation of loaded meshes
-    struct GPUMesh {
-        VkBuffer vertexBuffer = VK_NULL_HANDLE;
-        VmaAllocation vertexAllocation = VK_NULL_HANDLE;
-        VkBuffer indexBuffer = VK_NULL_HANDLE;
-        VmaAllocation indexAllocation = VK_NULL_HANDLE;
-        
-        // Original CPU-uploaded MDI buffer (used as compute input)
-        VkBuffer indirectBuffer = VK_NULL_HANDLE;
-        VmaAllocation indirectAllocation = VK_NULL_HANDLE;
-        
-        // Double-buffered dynamic culled MDI buffers (compute output, rasterizer input)
-        VkBuffer culledIndirectBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-        VmaAllocation culledIndirectAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-        
-        // Double-buffered draw counts (compute output, MDI count input)
-        VkBuffer drawCountBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-        VmaAllocation drawCountAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-        
-        // Static meshlet bounding sphere and cone data
-        VkBuffer boundsBuffer = VK_NULL_HANDLE;
-        VmaAllocation boundsAllocation = VK_NULL_HANDLE;
-        
-        // Compute descriptor sets (one per frame in flight)
-        VkDescriptorSet computeDescriptorSets[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-
-        uint32_t clusterCount = 0;
-    };
 
     struct ModelAsset {
         std::string name;
@@ -92,16 +70,11 @@ private:
 
     std::vector<ModelAsset> models;
     uint32_t activeModelIndex = 0;
-    bool tabWasPressed = false;
 
     // Visual verification of culling (Freeze Frustum)
     bool freezeCulling = false;
-    bool fKeyWasPressed = false;
     glm::vec4 frozenFrustumPlanes[6];
     glm::vec3 frozenCameraPos;
-
-    void uploadMesh(const MeshNode& meshNode, GPUMesh& gpuMesh);
-    void createComputeDescriptorSets(GPUMesh& gpuMesh);
 
     // Frame timing
     float lastFrameTime = 0.0f;
