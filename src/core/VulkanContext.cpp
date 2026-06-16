@@ -80,26 +80,8 @@ void VulkanContext::cleanup() {
             vkDestroyCommandPool(device, commandPool, nullptr);
         }
 
-        // 3. Swapchain image views
-        for (auto imageView : swapChainImageViews) {
-            vkDestroyImageView(device, imageView, nullptr);
-        }
-
-        // 4. Swapchain
-        if (swapChain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(device, swapChain, nullptr);
-        }
-
-        // Destroy depth resources
-        if (depthImageView != VK_NULL_HANDLE) {
-            vkDestroyImageView(device, depthImageView, nullptr);
-            depthImageView = VK_NULL_HANDLE;
-        }
-        if (depthImage != VK_NULL_HANDLE) {
-            vmaDestroyImage(allocator, depthImage, depthImageAllocation);
-            depthImage = VK_NULL_HANDLE;
-            depthImageAllocation = VK_NULL_HANDLE;
-        }
+        // Destroy swapchain and associated resources
+        cleanupSwapChain();
 
         // Destroy VMA Allocator before device
         if (allocator != VK_NULL_HANDLE) {
@@ -120,6 +102,44 @@ void VulkanContext::cleanup() {
     if (instance != VK_NULL_HANDLE) {
         vkDestroyInstance(instance, nullptr);
     }
+}
+
+void VulkanContext::cleanupSwapChain() {
+    if (device == VK_NULL_HANDLE) return;
+
+    // Destroy depth resources
+    if (depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, depthImageView, nullptr);
+        depthImageView = VK_NULL_HANDLE;
+    }
+    if (depthImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(allocator, depthImage, depthImageAllocation);
+        depthImage = VK_NULL_HANDLE;
+        depthImageAllocation = VK_NULL_HANDLE;
+    }
+
+    // Destroy swapchain image views
+    for (auto imageView : swapChainImageViews) {
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+    }
+    swapChainImageViews.clear();
+    swapChainImages.clear();
+
+    // Destroy swapchain
+    if (swapChain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device, swapChain, nullptr);
+        swapChain = VK_NULL_HANDLE;
+    }
+}
+
+void VulkanContext::recreateSwapChain() {
+    cleanupSwapChain();
+
+    createSwapChain();
+    createImageViews();
+    createDepthResources();
 }
 
 void VulkanContext::createInstance() {

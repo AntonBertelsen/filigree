@@ -19,6 +19,10 @@ public:
 
     void run();
 
+    void setFramebufferResized(bool resized) { framebufferResized = resized; }
+    void recreateSwapChain();
+    void handleWindowRefresh();
+
 private:
     void initWindow();
     void mainLoop();
@@ -68,4 +72,5 @@ private:
 
     // Frame timing
     float lastFrameTime = 0.0f;
+    bool framebufferResized = false;
 };

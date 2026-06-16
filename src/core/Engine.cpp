@@ -54,18 +54,39 @@ Engine::~Engine() {
     cleanup();
 }
 
+static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+    auto engine = reinterpret_cast<Engine*>(glfwGetWindowUserPointer(window));
+    if (engine) {
+        engine->setFramebufferResized(true);
+        if (width > 0 && height > 0) {
+            engine->handleWindowRefresh();
+        }
+    }
+}
+
+static void windowRefreshCallback(GLFWwindow* window) {
+    auto engine = reinterpret_cast<Engine*>(glfwGetWindowUserPointer(window));
+    if (engine) {
+        engine->handleWindowRefresh();
+    }
+}
+
 void Engine::initWindow() {
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     window = glfwCreateWindow(WIDTH, HEIGHT, "Filigree Engine", nullptr, nullptr);
     if (!window) {
         throw std::runtime_error("Failed to create GLFW window");
     }
+
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+    glfwSetWindowRefreshCallback(window, windowRefreshCallback);
 }
 
 void Engine::run() {
@@ -322,6 +343,11 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 }
 
 void Engine::drawFrame() {
+    if (framebufferResized) {
+        framebufferResized = false;
+        recreateSwapChain();
+    }
+
     VkDevice device = context->getDevice();
     VkQueue graphicsQueue = context->getGraphicsQueue();
     VkQueue presentQueue = context->getPresentQueue();
@@ -329,24 +355,31 @@ void Engine::drawFrame() {
     // 1. Wait for frame's fence
     VkFence currentFence = context->getCurrentInFlightFence();
     vkWaitForFences(device, 1, &currentFence, VK_TRUE, UINT64_MAX);
-    vkResetFences(device, 1, &currentFence);
 
     // 2. Acquire next swapchain image
     uint32_t imageIndex;
-    VkResult acquireResult = vkAcquireNextImageKHR(
-        device, 
-        context->getSwapChain(), 
-        UINT64_MAX, 
-        context->getCurrentImageAvailableSemaphore(), 
-        VK_NULL_HANDLE, 
-        &imageIndex
-    );
+    VkResult acquireResult;
+    while (true) {
+        acquireResult = vkAcquireNextImageKHR(
+            device, 
+            context->getSwapChain(), 
+            UINT64_MAX, 
+            context->getCurrentImageAvailableSemaphore(), 
+            VK_NULL_HANDLE, 
+            &imageIndex
+        );
 
-    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
-        return; // handle swapchain recreation if resize was enabled
-    } else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
-        throw std::runtime_error("Failed to acquire swapchain image!");
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapChain();
+            continue;
+        } else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("Failed to acquire swapchain image!");
+        }
+        break;
     }
+
+    // Only reset fence if we are proceeding with submission
+    vkResetFences(device, 1, &currentFence);
 
     // 3. Reset command buffer
     VkCommandBuffer cb = context->getCurrentCommandBuffer();
@@ -396,14 +429,42 @@ void Engine::drawFrame() {
     presentInfo.pImageIndices = &imageIndex;
 
     VkResult presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
-    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
-        // handle swapchain recreation if resize was enabled
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || framebufferResized) {
+        framebufferResized = false;
+        recreateSwapChain();
     } else if (presentResult != VK_SUCCESS) {
         throw std::runtime_error("Failed to present swapchain image!");
     }
 
     // 7. Advance frame index
     context->advanceFrame();
+}
+
+void Engine::recreateSwapChain() {
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(window, &width, &height);
+        glfwWaitEvents();
+    }
+
+    vkDeviceWaitIdle(context->getDevice());
+
+    context->recreateSwapChain();
+}
+
+void Engine::handleWindowRefresh() {
+    // Calculate delta time
+    float currentFrameTime = static_cast<float>(glfwGetTime());
+    float deltaTime = currentFrameTime - lastFrameTime;
+    lastFrameTime = currentFrameTime;
+
+    // Update Camera and Scene Graph
+    cameraNode->update(deltaTime, window);
+    rootNode->update(deltaTime);
+    rootNode->updateWorldMatrix(glm::mat4(1.0f));
+
+    drawFrame();
 }
 
 void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {

@@ -38,6 +38,10 @@ public:
     VkCommandPool getCommandPool() const { return commandPool; }
     VmaAllocator getAllocator() const { return allocator; }
 
+    // Swapchain recreation support
+    void recreateSwapChain();
+    void cleanupSwapChain();
+
     // Buffer helpers (using VMA)
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocFlags, VkBuffer& buffer, VmaAllocation& allocation);
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
