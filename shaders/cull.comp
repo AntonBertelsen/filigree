@@ -1,0 +1,99 @@
+#version 450
+
+// Thread group size
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Standard Vulkan indirect draw command structure
+struct VkDrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+// Meshlet bounds structure (packed to avoid std430 alignment pitfalls)
+struct MeshletBounds {
+    vec4 sphereCenterRadius; // xyz = center, w = radius
+    vec4 coneAxisCutoff;     // xyz = axis, w = cutoff
+};
+
+// Descriptor set bindings
+layout(std430, set = 0, binding = 0) readonly buffer InputCommands {
+    VkDrawIndexedIndirectCommand inputs[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OutputCommands {
+    VkDrawIndexedIndirectCommand outputs[];
+};
+
+layout(std430, set = 0, binding = 2) buffer DrawCount {
+    uint count;
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer Bounds {
+    MeshletBounds bounds[];
+};
+
+// Push Constants
+layout(push_constant) uniform CullPushConstants {
+    vec4 frustumPlanes[6];
+    vec3 cameraPos;
+    uint maxDrawCount;
+} pcs;
+
+void main() {
+    uint gID = gl_GlobalInvocationID.x;
+    
+    // Bounds check
+    if (gID >= pcs.maxDrawCount) {
+        return;
+    }
+    
+    // Read meshlet bounds
+    vec4 centerRadius = bounds[gID].sphereCenterRadius;
+    vec3 center = centerRadius.xyz;
+    float radius = centerRadius.w;
+    
+    // 1. Frustum Culling Test
+    bool visible = true;
+    for (int i = 0; i < 6; ++i) {
+        float dist = dot(pcs.frustumPlanes[i].xyz, center) + pcs.frustumPlanes[i].w;
+        if (dist < -radius) {
+            visible = false;
+            break;
+        }
+    }
+    
+    // 2. Backface Cone Culling Test (only if frustum culling passed)
+    if (visible) {
+        vec4 axisCutoff = bounds[gID].coneAxisCutoff;
+        vec3 axis = axisCutoff.xyz;
+        float cutoff = axisCutoff.w; // cos(angle)
+        
+        // If cutoff is 1.0 (uninitialized or invalid), skip backface check
+        // Also skip if cutoff is -1.0 (meaning it can face any direction)
+        if (cutoff > -0.99 && cutoff < 0.99) {
+            vec3 toCenter = center - pcs.cameraPos;
+            float dist = length(toCenter);
+            
+            // Singularity-free formula that accounts for sphere radius:
+            // dot(center - camera, axis) >= cutoff * dist + radius
+            if (dot(toCenter, axis) >= cutoff * dist + radius) {
+                visible = false;
+            }
+        }
+    }
+    
+    // If visible, write to output buffer
+    if (visible) {
+        // Increment atomic counter to get output index
+        uint outIndex = atomicAdd(count, 1);
+        
+        // Copy the command structure and set instanceCount to 1
+        VkDrawIndexedIndirectCommand cmd = inputs[gID];
+        cmd.instanceCount = 1;
+        
+        outputs[outIndex] = cmd;
+    }
+}

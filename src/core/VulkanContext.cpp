@@ -263,10 +263,15 @@ void VulkanContext::createLogicalDevice() {
     dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
     dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
 
+    VkPhysicalDeviceVulkan12Features vulkan12Features{};
+    vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vulkan12Features.drawIndirectCount = VK_TRUE;
+    vulkan12Features.pNext = &dynamicRenderingFeatures;
+
     VkPhysicalDeviceSynchronization2Features synchronization2Features{};
     synchronization2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
     synchronization2Features.synchronization2 = VK_TRUE;
-    synchronization2Features.pNext = &dynamicRenderingFeatures;
+    synchronization2Features.pNext = &vulkan12Features;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

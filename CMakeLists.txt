@@ -35,6 +35,8 @@ set(SOURCES
     src/scene/MeshNode.cpp
     src/renderer/StandardPipeline.hpp
     src/renderer/StandardPipeline.cpp
+    src/renderer/CullPipeline.hpp
+    src/renderer/CullPipeline.cpp
 )
 
 # 4. Define our executable target
@@ -74,6 +76,7 @@ endif()
 set(SHADER_SPV_OUTPUTS
     "${CMAKE_BINARY_DIR}/bin/shaders/vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/cull.spv"
 )
 
 # Create output shader directory in the build folder
@@ -93,6 +96,14 @@ add_custom_command(
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag"
     COMMENT "Compiling fragment shader to SPIR-V..."
+)
+
+# Custom command to compile compute shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/cull.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp" -o "${CMAKE_BINARY_DIR}/bin/shaders/cull.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp"
+    COMMENT "Compiling compute shader to SPIR-V..."
 )
 
 # Create a target for shaders that our main executable depends on
