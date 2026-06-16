@@ -144,6 +144,10 @@ void Engine::cleanup() {
                 vmaDestroyBuffer(allocator, asset.gpuMesh.indexBuffer, asset.gpuMesh.indexAllocation);
                 asset.gpuMesh.indexBuffer = VK_NULL_HANDLE;
             }
+            if (asset.gpuMesh.indirectBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, asset.gpuMesh.indirectBuffer, asset.gpuMesh.indirectAllocation);
+                asset.gpuMesh.indirectBuffer = VK_NULL_HANDLE;
+            }
         }
     }
     models.clear();
@@ -261,14 +265,16 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
     glm::mat4 modelMatrix = glm::mat4(1.0f);
     VkBuffer activeVertexBuffer = VK_NULL_HANDLE;
     VkBuffer activeIndexBuffer = VK_NULL_HANDLE;
-    uint32_t activeIndexCount = 0;
+    VkBuffer activeIndirectBuffer = VK_NULL_HANDLE;
+    uint32_t activeClusterCount = 0;
 
     if (activeModelIndex < models.size()) {
         const auto& activeAsset = models[activeModelIndex];
         modelMatrix = activeAsset.sceneNode->getWorldMatrix();
         activeVertexBuffer = activeAsset.gpuMesh.vertexBuffer;
         activeIndexBuffer = activeAsset.gpuMesh.indexBuffer;
-        activeIndexCount = activeAsset.gpuMesh.indexCount;
+        activeIndirectBuffer = activeAsset.gpuMesh.indirectBuffer;
+        activeClusterCount = activeAsset.gpuMesh.clusterCount;
     }
 
     glm::mat4 mvp = viewProj * modelMatrix;
@@ -277,10 +283,16 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
     // 6. Bind Vertex and Index Buffers
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
-    vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT16); // Reconstructed indices are local uint16_t
 
-    // 7. Draw the Mesh!
-    vkCmdDrawIndexed(cb, activeIndexCount, 1, 0, 0, 0);
+    // 7. Draw the Mesh via Multi-Draw Indirect
+    vkCmdDrawIndexedIndirect(
+        cb,
+        activeIndirectBuffer,
+        0,
+        activeClusterCount,
+        sizeof(VkDrawIndexedIndirectCommand)
+    );
 
     // 7. End Dynamic Rendering
     vkCmdEndRendering(cb);
@@ -485,42 +497,48 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     std::cout << "    Avg Vertices/Meshlet: " << (static_cast<double>(total_local_vertices) / meshlet_count) 
               << ", Avg Triangles/Meshlet: " << (static_cast<double>(total_local_triangles) / meshlet_count) << std::endl;
 
-    // Flatten and color the meshlets into CPU arrays for standard rendering
+    // Flatten the meshlets into CPU arrays for standard rendering
     std::vector<MeshVertex> flatVertices;
-    std::vector<uint32_t> flatIndices;
+    std::vector<uint16_t> flatIndices; // Local uint16_t indices
+    std::vector<VkDrawIndexedIndirectCommand> indirectCommands;
     
     flatVertices.reserve(meshlet_count * max_vertices);
     flatIndices.reserve(meshlet_count * max_triangles * 3);
+    indirectCommands.reserve(meshlet_count);
     
     for (size_t i = 0; i < meshlet_count; ++i) {
         const auto& meshlet = meshlets[i];
         
-        // Deterministic high-contrast color based on meshlet index
-        float r = static_cast<float>((i * 17) % 255) / 255.0f;
-        float g = static_cast<float>((i * 59) % 255) / 255.0f;
-        float b = static_cast<float>((i * 97) % 255) / 255.0f;
-        glm::vec3 clusterColor(r, g, b);
-        
-        uint32_t baseVertexIdx = static_cast<uint32_t>(flatVertices.size());
+        uint32_t baseVertexOffset = static_cast<uint32_t>(flatVertices.size());
+        uint32_t baseIndexOffset = static_cast<uint32_t>(flatIndices.size());
         
         // Copy meshlet vertices
         for (uint32_t v = 0; v < meshlet.vertex_count; ++v) {
             uint32_t origVertexIdx = meshlet_vertices[meshlet.vertex_offset + v];
             MeshVertex vertex = vertices[origVertexIdx];
-            vertex.color = clusterColor;
             flatVertices.push_back(vertex);
         }
         
-        // Copy meshlet indices
+        // Copy meshlet indices (local uint16_t!)
         for (uint32_t t = 0; t < meshlet.triangle_count; ++t) {
-            uint32_t localIdx0 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 0];
-            uint32_t localIdx1 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 1];
-            uint32_t localIdx2 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 2];
+            uint16_t localIdx0 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 0];
+            uint16_t localIdx1 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 1];
+            uint16_t localIdx2 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 2];
             
-            flatIndices.push_back(baseVertexIdx + localIdx0);
-            flatIndices.push_back(baseVertexIdx + localIdx1);
-            flatIndices.push_back(baseVertexIdx + localIdx2);
+            flatIndices.push_back(localIdx0);
+            flatIndices.push_back(localIdx1);
+            flatIndices.push_back(localIdx2);
         }
+        
+        // Construct indirect draw command
+        VkDrawIndexedIndirectCommand cmd{};
+        cmd.indexCount = meshlet.triangle_count * 3;
+        cmd.instanceCount = 1;
+        cmd.firstIndex = baseIndexOffset;
+        cmd.vertexOffset = static_cast<int32_t>(baseVertexOffset);
+        cmd.firstInstance = static_cast<uint32_t>(i);
+        
+        indirectCommands.push_back(cmd);
     }
     
     // 1. Vertex Buffer
@@ -555,8 +573,7 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     vmaDestroyBuffer(ctx.getAllocator(), stagingVertexBuffer, stagingVertexAllocation);
     
     // 2. Index Buffer
-    VkDeviceSize indexBufferSize = sizeof(uint32_t) * flatIndices.size();
-    gpuMesh.indexCount = static_cast<uint32_t>(flatIndices.size());
+    VkDeviceSize indexBufferSize = sizeof(uint16_t) * flatIndices.size();
     
     VkBuffer stagingIndexBuffer;
     VmaAllocation stagingIndexAllocation;
@@ -585,4 +602,36 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     
     ctx.copyBuffer(stagingIndexBuffer, gpuMesh.indexBuffer, indexBufferSize);
     vmaDestroyBuffer(ctx.getAllocator(), stagingIndexBuffer, stagingIndexAllocation);
+    
+    // 3. Indirect Buffer
+    VkDeviceSize indirectBufferSize = sizeof(VkDrawIndexedIndirectCommand) * indirectCommands.size();
+    gpuMesh.clusterCount = static_cast<uint32_t>(indirectCommands.size());
+    
+    VkBuffer stagingIndirectBuffer;
+    VmaAllocation stagingIndirectAllocation;
+    ctx.createBuffer(
+        indirectBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_MEMORY_USAGE_AUTO,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        stagingIndirectBuffer,
+        stagingIndirectAllocation
+    );
+    
+    void* indirectData;
+    vmaMapMemory(ctx.getAllocator(), stagingIndirectAllocation, &indirectData);
+    memcpy(indirectData, indirectCommands.data(), indirectBufferSize);
+    vmaUnmapMemory(ctx.getAllocator(), stagingIndirectAllocation);
+    
+    ctx.createBuffer(
+        indirectBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        0,
+        gpuMesh.indirectBuffer,
+        gpuMesh.indirectAllocation
+    );
+    
+    ctx.copyBuffer(stagingIndirectBuffer, gpuMesh.indirectBuffer, indirectBufferSize);
+    vmaDestroyBuffer(ctx.getAllocator(), stagingIndirectBuffer, stagingIndirectAllocation);
 }

@@ -53,7 +53,9 @@ private:
         VmaAllocation vertexAllocation = VK_NULL_HANDLE;
         VkBuffer indexBuffer = VK_NULL_HANDLE;
         VmaAllocation indexAllocation = VK_NULL_HANDLE;
-        uint32_t indexCount = 0;
+        VkBuffer indirectBuffer = VK_NULL_HANDLE;
+        VmaAllocation indirectAllocation = VK_NULL_HANDLE;
+        uint32_t clusterCount = 0;
     };
 
     struct ModelAsset {

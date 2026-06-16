@@ -14,8 +14,7 @@ namespace std {
         size_t operator()(MeshVertex const& vertex) const {
             return ((hash<glm::vec3>()(vertex.pos) ^
                      (hash<glm::vec3>()(vertex.normal) << 1)) >> 1) ^
-                     (hash<glm::vec2>()(vertex.texCoord) << 1) ^
-                     (hash<glm::vec3>()(vertex.color) << 2);
+                     (hash<glm::vec2>()(vertex.texCoord) << 1);
         }
     };
 }
@@ -67,15 +66,6 @@ void MeshNode::loadModel() {
                 };
             } else {
                 vertex.texCoord = glm::vec2(0.0f, 0.0f);
-            }
-
-            vertex.color = { 1.0f, 1.0f, 1.0f };
-            if (!attrib.colors.empty()) {
-                vertex.color = {
-                    attrib.colors[3 * index.vertex_index + 0],
-                    attrib.colors[3 * index.vertex_index + 1],
-                    attrib.colors[3 * index.vertex_index + 2]
-                };
             }
 
             if (uniqueVertices.count(vertex) == 0) {

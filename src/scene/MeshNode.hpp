@@ -11,10 +11,9 @@ struct MeshVertex {
     glm::vec3 pos;
     glm::vec3 normal;
     glm::vec2 texCoord;
-    glm::vec3 color;
 
     bool operator==(const MeshVertex& other) const {
-        return pos == other.pos && normal == other.normal && texCoord == other.texCoord && color == other.color;
+        return pos == other.pos && normal == other.normal && texCoord == other.texCoord;
     }
 };
 
