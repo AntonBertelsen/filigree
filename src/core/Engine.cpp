@@ -15,37 +15,40 @@ Engine::Engine() {
     cameraNode = camera.get();
     rootNode->addChild(std::move(camera));
     
-    // Load Stanford Bunny OBJ Mesh Model
-    std::cout << "Loading Bunny model..." << std::endl;
-    auto bunny = std::make_unique<MeshNode>("assets/models/bunny.obj");
-    bunnyNode = bunny.get();
-    bunnyNode->setPosition(glm::vec3(0.0f, -0.7f, 0.0f));
-    bunnyNode->setScale(glm::vec3(1.0f));
-    rootNode->addChild(std::move(bunny));
+    // Asset Configuration list
+    struct AssetConfig {
+        std::string name;
+        std::string path;
+        glm::vec3 position;
+        float scale;
+    };
+    std::vector<AssetConfig> configs = {
+        {"Bunny", "assets/models/bunny.obj", {0.0f, -0.7f, 0.0f}, 1.0f},
+        {"Lucy", "assets/models/lucy.obj", {0.0f, -0.8f, 0.0f}, 0.002f},
+        {"Torus Knot", "assets/models/torus_knot.obj", {0.0f, 0.0f, 0.0f}, 0.25f}
+    };
     
-    // Load Stanford Lucy OBJ Mesh Model
-    std::cout << "Loading Lucy model..." << std::endl;
-    auto lucy = std::make_unique<MeshNode>("assets/models/lucy.obj");
-    lucyNode = lucy.get();
-    lucyNode->setPosition(glm::vec3(0.0f, -0.8f, 0.0f));
-    lucyNode->setScale(glm::vec3(0.002f));
-    rootNode->addChild(std::move(lucy));
-
-    // Load Torus Knot OBJ Mesh Model
-    std::cout << "Loading Torus Knot model..." << std::endl;
-    auto torus = std::make_unique<MeshNode>("assets/models/torus_knot.obj");
-    torusNode = torus.get();
-    torusNode->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
-    torusNode->setScale(glm::vec3(0.25f));
-    rootNode->addChild(std::move(torus));
-    
-    // Upload meshes to GPU using VMA
-    std::cout << "Uploading Bunny mesh to GPU..." << std::endl;
-    uploadMesh(*bunnyNode, bunnyMesh);
-    std::cout << "Uploading Lucy mesh to GPU..." << std::endl;
-    uploadMesh(*lucyNode, lucyMesh);
-    std::cout << "Uploading Torus Knot mesh to GPU..." << std::endl;
-    uploadMesh(*torusNode, torusMesh);
+    for (const auto& config : configs) {
+        std::cout << "Loading " << config.name << " model..." << std::endl;
+        auto meshNode = std::make_unique<MeshNode>(config.path);
+        meshNode->setPosition(config.position);
+        meshNode->setScale(glm::vec3(config.scale));
+        
+        MeshNode* weakNode = meshNode.get();
+        rootNode->addChild(std::move(meshNode));
+        
+        ModelAsset asset{};
+        asset.name = config.name;
+        asset.path = config.path;
+        asset.position = config.position;
+        asset.scale = config.scale;
+        asset.sceneNode = weakNode;
+        
+        std::cout << "Uploading " << config.name << " mesh to GPU..." << std::endl;
+        uploadMesh(*weakNode, asset.gpuMesh);
+        
+        models.push_back(asset);
+    }
     
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
@@ -102,19 +105,11 @@ void Engine::mainLoop() {
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
 
-        // Poll Tab key to toggle between models: Bunny -> Lucy -> Torus Knot -> Bunny
+        // Poll Tab key to toggle between models
         bool currentTabState = (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
-        if (currentTabState && !tabWasPressed) {
-            if (activeModel == ModelType::Bunny) {
-                activeModel = ModelType::Lucy;
-                std::cout << "Active model switched to: Lucy" << std::endl;
-            } else if (activeModel == ModelType::Lucy) {
-                activeModel = ModelType::TorusKnot;
-                std::cout << "Active model switched to: Torus Knot" << std::endl;
-            } else {
-                activeModel = ModelType::Bunny;
-                std::cout << "Active model switched to: Bunny" << std::endl;
-            }
+        if (currentTabState && !tabWasPressed && !models.empty()) {
+            activeModelIndex = (activeModelIndex + 1) % models.size();
+            std::cout << "Active model switched to: " << models[activeModelIndex].name << std::endl;
         }
         tabWasPressed = currentTabState;
 
@@ -135,38 +130,22 @@ void Engine::cleanup() {
     // Release scene graph before Vulkan cleanup
     rootNode.reset();
     cameraNode = nullptr;
-    bunnyNode = nullptr;
-    lucyNode = nullptr;
-    torusNode = nullptr;
 
     // Release GPU Mesh buffers
     if (context) {
         VmaAllocator allocator = context->getAllocator();
-        if (bunnyMesh.vertexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, bunnyMesh.vertexBuffer, bunnyMesh.vertexAllocation);
-            bunnyMesh.vertexBuffer = VK_NULL_HANDLE;
-        }
-        if (bunnyMesh.indexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, bunnyMesh.indexBuffer, bunnyMesh.indexAllocation);
-            bunnyMesh.indexBuffer = VK_NULL_HANDLE;
-        }
-        if (lucyMesh.vertexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, lucyMesh.vertexBuffer, lucyMesh.vertexAllocation);
-            lucyMesh.vertexBuffer = VK_NULL_HANDLE;
-        }
-        if (lucyMesh.indexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, lucyMesh.indexBuffer, lucyMesh.indexAllocation);
-            lucyMesh.indexBuffer = VK_NULL_HANDLE;
-        }
-        if (torusMesh.vertexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, torusMesh.vertexBuffer, torusMesh.vertexAllocation);
-            torusMesh.vertexBuffer = VK_NULL_HANDLE;
-        }
-        if (torusMesh.indexBuffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, torusMesh.indexBuffer, torusMesh.indexAllocation);
-            torusMesh.indexBuffer = VK_NULL_HANDLE;
+        for (auto& asset : models) {
+            if (asset.gpuMesh.vertexBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, asset.gpuMesh.vertexBuffer, asset.gpuMesh.vertexAllocation);
+                asset.gpuMesh.vertexBuffer = VK_NULL_HANDLE;
+            }
+            if (asset.gpuMesh.indexBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, asset.gpuMesh.indexBuffer, asset.gpuMesh.indexAllocation);
+                asset.gpuMesh.indexBuffer = VK_NULL_HANDLE;
+            }
         }
     }
+    models.clear();
 
     // Release pipeline and context
     pipeline.reset();
@@ -278,26 +257,17 @@ void Engine::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
     float aspect = static_cast<float>(context->getSwapChainExtent().width) / static_cast<float>(context->getSwapChainExtent().height);
     glm::mat4 viewProj = cameraNode->getProjectionMatrix(aspect) * cameraNode->getViewMatrix();
     
-    glm::mat4 modelMatrix;
-    VkBuffer activeVertexBuffer;
-    VkBuffer activeIndexBuffer;
-    uint32_t activeIndexCount;
+    glm::mat4 modelMatrix = glm::mat4(1.0f);
+    VkBuffer activeVertexBuffer = VK_NULL_HANDLE;
+    VkBuffer activeIndexBuffer = VK_NULL_HANDLE;
+    uint32_t activeIndexCount = 0;
 
-    if (activeModel == ModelType::Bunny) {
-        modelMatrix = bunnyNode->getWorldMatrix();
-        activeVertexBuffer = bunnyMesh.vertexBuffer;
-        activeIndexBuffer = bunnyMesh.indexBuffer;
-        activeIndexCount = bunnyMesh.indexCount;
-    } else if (activeModel == ModelType::Lucy) {
-        modelMatrix = lucyNode->getWorldMatrix();
-        activeVertexBuffer = lucyMesh.vertexBuffer;
-        activeIndexBuffer = lucyMesh.indexBuffer;
-        activeIndexCount = lucyMesh.indexCount;
-    } else {
-        modelMatrix = torusNode->getWorldMatrix();
-        activeVertexBuffer = torusMesh.vertexBuffer;
-        activeIndexBuffer = torusMesh.indexBuffer;
-        activeIndexCount = torusMesh.indexCount;
+    if (activeModelIndex < models.size()) {
+        const auto& activeAsset = models[activeModelIndex];
+        modelMatrix = activeAsset.sceneNode->getWorldMatrix();
+        activeVertexBuffer = activeAsset.gpuMesh.vertexBuffer;
+        activeIndexBuffer = activeAsset.gpuMesh.indexBuffer;
+        activeIndexCount = activeAsset.gpuMesh.indexCount;
     }
 
     glm::mat4 mvp = viewProj * modelMatrix;

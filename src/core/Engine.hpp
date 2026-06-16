@@ -7,6 +7,9 @@
 #include "renderer/StandardPipeline.hpp"
 
 #include <memory>
+#include <vector>
+#include <string>
+
 
 class Engine {
 public:
@@ -43,9 +46,6 @@ private:
     // Scene Graph
     std::unique_ptr<Node> rootNode;
     CameraNode* cameraNode = nullptr;
-    MeshNode* bunnyNode = nullptr;
-    MeshNode* lucyNode = nullptr;
-    MeshNode* torusNode = nullptr;
 
     // GPU representation of loaded meshes
     struct GPUMesh {
@@ -56,16 +56,17 @@ private:
         uint32_t indexCount = 0;
     };
 
-    GPUMesh bunnyMesh;
-    GPUMesh lucyMesh;
-    GPUMesh torusMesh;
-
-    enum class ModelType {
-        Bunny,
-        Lucy,
-        TorusKnot
+    struct ModelAsset {
+        std::string name;
+        std::string path;
+        glm::vec3 position;
+        float scale;
+        GPUMesh gpuMesh;
+        MeshNode* sceneNode = nullptr;
     };
-    ModelType activeModel = ModelType::Bunny;
+
+    std::vector<ModelAsset> models;
+    uint32_t activeModelIndex = 0;
     bool tabWasPressed = false;
 
     void uploadMesh(const MeshNode& meshNode, GPUMesh& gpuMesh);
