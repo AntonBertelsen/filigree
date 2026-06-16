@@ -1,0 +1,57 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform HZBPushConstants {
+    ivec2 srcSize;
+    int srcLevel; // -1 means read from depth texture, >=0 means read from HZB texture
+} pcs;
+
+// Input bindings
+layout(set = 0, binding = 0) uniform sampler2D inDepthTex;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D inHzbImg;
+
+// Output binding
+layout(set = 0, binding = 2, r32f) writeonly uniform image2D outHzbImg;
+
+void main() {
+    ivec2 threadID = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(outHzbImg);
+    
+    if (threadID.x >= dstSize.x || threadID.y >= dstSize.y) {
+        return;
+    }
+
+    float maxDepth = 0.0;
+    
+    if (pcs.srcLevel == -1) {
+        // Calculate conservative footprint in source texture
+        vec2 uvMin = vec2(threadID) / vec2(dstSize);
+        vec2 uvMax = vec2(threadID + 1) / vec2(dstSize);
+        
+        ivec2 sMin = ivec2(floor(uvMin * vec2(pcs.srcSize)));
+        ivec2 sMax = ivec2(ceil(uvMax * vec2(pcs.srcSize)));
+        
+        // Clamp to source size to avoid reading out of bounds
+        sMin = clamp(sMin, ivec2(0), pcs.srcSize - 1);
+        sMax = clamp(sMax, ivec2(0), pcs.srcSize);
+        
+        for (int y = sMin.y; y < sMax.y; ++y) {
+            for (int x = sMin.x; x < sMax.x; ++x) {
+                float d = texelFetch(inDepthTex, ivec2(x, y), 0).r;
+                maxDepth = max(maxDepth, d);
+            }
+        }
+    } else {
+        // Read 2x2 texels from the previous HZB level
+        ivec2 srcCoord = threadID * 2;
+        
+        float d0 = imageLoad(inHzbImg, srcCoord + ivec2(0, 0)).r;
+        float d1 = imageLoad(inHzbImg, srcCoord + ivec2(1, 0)).r;
+        float d2 = imageLoad(inHzbImg, srcCoord + ivec2(0, 1)).r;
+        float d3 = imageLoad(inHzbImg, srcCoord + ivec2(1, 1)).r;
+        
+        maxDepth = max(max(d0, d1), max(d2, d3));
+    }
+
+    imageStore(outHzbImg, threadID, vec4(maxDepth));
+}

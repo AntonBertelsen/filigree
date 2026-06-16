@@ -6,9 +6,17 @@
 #include <glm/glm.hpp>
 
 struct CullPushConstants {
+    glm::mat4 modelViewProj;
     glm::vec4 frustumPlanes[6];
     glm::vec3 cameraPos;
+    float padding; // Align hzbParams to 16-byte boundary
+    glm::vec4 hzbParams; // x = proj[0][0], y = proj[1][1], z = proj[2][2], w = proj[3][2]
+    float modelScale;
     uint32_t maxDrawCount;
+    uint32_t hzbWidth;
+    uint32_t hzbHeight;
+    uint32_t maxMipLevel;
+    uint32_t hzbCullingEnabled;
 };
 
 struct MeshletBounds {

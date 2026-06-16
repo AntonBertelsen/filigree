@@ -51,6 +51,7 @@ void VulkanContext::initVulkan() {
     createImageViews();
     createDepthResources();
     createCommandPool();
+    createHzbResources();
     createCommandBuffers();
     createSyncObjects();
 }
@@ -107,6 +108,8 @@ void VulkanContext::cleanup() {
 void VulkanContext::cleanupSwapChain() {
     if (device == VK_NULL_HANDLE) return;
 
+    cleanupHzbResources();
+
     // Destroy depth resources
     if (depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(device, depthImageView, nullptr);
@@ -140,6 +143,7 @@ void VulkanContext::recreateSwapChain() {
     createSwapChain();
     createImageViews();
     createDepthResources();
+    createHzbResources();
 }
 
 void VulkanContext::createInstance() {
@@ -651,7 +655,7 @@ void VulkanContext::createDepthResources() {
     imageInfo.format = depthFormat;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -677,6 +681,134 @@ void VulkanContext::createDepthResources() {
     if (vkCreateImageView(device, &viewInfo, nullptr, &depthImageView) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create depth image view!");
     }
+}
 
-    std::cout << "Successfully created depth resources (format " << depthFormat << ")!" << std::endl;
+void VulkanContext::createHzbResources() {
+    for (int f = 0; f < 2; f++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent.width = HZB_WIDTH;
+        imageInfo.extent.height = HZB_HEIGHT;
+        imageInfo.extent.depth = 1;
+        imageInfo.mipLevels = HZB_MIP_LEVELS;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = VK_FORMAT_R32_SFLOAT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+        if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &hzbImages[f], &hzbImageAllocations[f], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create HZB image!");
+        }
+
+        // Create main image view (covers all mip levels, used for sampling)
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = hzbImages[f];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = HZB_MIP_LEVELS;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &hzbImageViews[f]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create HZB main image view!");
+        }
+
+        // Create individual level image views (each covers a single mip level, used as storage images)
+        for (uint32_t level = 0; level < HZB_MIP_LEVELS; level++) {
+            VkImageViewCreateInfo levelViewInfo{};
+            levelViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            levelViewInfo.image = hzbImages[f];
+            levelViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            levelViewInfo.format = VK_FORMAT_R32_SFLOAT;
+            levelViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            levelViewInfo.subresourceRange.baseMipLevel = level;
+            levelViewInfo.subresourceRange.levelCount = 1;
+            levelViewInfo.subresourceRange.baseArrayLayer = 0;
+            levelViewInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(device, &levelViewInfo, nullptr, &hzbLevelImageViews[f][level]) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create HZB level image view!");
+            }
+        }
+
+        // Initialize HZB image contents to 1.0 (clear value)
+        VkCommandBuffer cb = beginSingleTimeCommands();
+        
+        VkImageMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        barrier.srcAccessMask = 0;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.image = hzbImages[f];
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = HZB_MIP_LEVELS;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cb, &dep);
+
+        VkClearColorValue clearVal{};
+        clearVal.float32[0] = 1.0f;
+        clearVal.float32[1] = 1.0f;
+        clearVal.float32[2] = 1.0f;
+        clearVal.float32[3] = 1.0f;
+
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = HZB_MIP_LEVELS;
+        range.baseArrayLayer = 0;
+        range.layerCount = 1;
+
+        vkCmdClearColorImage(cb, hzbImages[f], VK_IMAGE_LAYOUT_GENERAL, &clearVal, 1, &range);
+
+        // Transition to SHADER_READ_ONLY_OPTIMAL for first culling pass
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+        barrier.dstAccessMask = 0;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier2(cb, &dep);
+
+        endSingleTimeCommands(cb);
+    }
+}
+
+void VulkanContext::cleanupHzbResources() {
+    for (int f = 0; f < 2; f++) {
+        for (uint32_t level = 0; level < HZB_MIP_LEVELS; level++) {
+            if (hzbLevelImageViews[f][level] != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, hzbLevelImageViews[f][level], nullptr);
+                hzbLevelImageViews[f][level] = VK_NULL_HANDLE;
+            }
+        }
+        if (hzbImageViews[f] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, hzbImageViews[f], nullptr);
+            hzbImageViews[f] = VK_NULL_HANDLE;
+        }
+        if (hzbImages[f] != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator, hzbImages[f], hzbImageAllocations[f]);
+            hzbImages[f] = VK_NULL_HANDLE;
+            hzbImageAllocations[f] = VK_NULL_HANDLE;
+        }
+    }
 }

@@ -35,6 +35,13 @@ public:
     VkFormat getDepthFormat() const { return depthFormat; }
     VkImage getDepthImage() const { return depthImage; }
 
+    VkImage getHzbImage(uint32_t frameIndex) const { return hzbImages[frameIndex]; }
+    VkImageView getHzbImageView(uint32_t frameIndex) const { return hzbImageViews[frameIndex]; }
+    VkImageView getHzbLevelImageView(uint32_t frameIndex, uint32_t level) const { return hzbLevelImageViews[frameIndex][level]; }
+    static constexpr uint32_t HZB_MIP_LEVELS = 11;
+    static constexpr uint32_t HZB_WIDTH = 1024;
+    static constexpr uint32_t HZB_HEIGHT = 1024;
+
     VkCommandPool getCommandPool() const { return commandPool; }
     VmaAllocator getAllocator() const { return allocator; }
 
@@ -135,6 +142,15 @@ private:
     VmaAllocation depthImageAllocation = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+
+    // HZB handles (double buffered)
+    VkImage hzbImages[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VmaAllocation hzbImageAllocations[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkImageView hzbImageViews[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkImageView hzbLevelImageViews[2][11] = {};
+
+    void createHzbResources();
+    void cleanupHzbResources();
 
     // Command Pool
     VkCommandPool commandPool = VK_NULL_HANDLE;

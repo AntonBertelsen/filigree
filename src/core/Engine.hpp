@@ -4,9 +4,9 @@
 #include "scene/Node.hpp"
 #include "scene/CameraNode.hpp"
 #include "scene/MeshNode.hpp"
-#include "renderer/StandardPipeline.hpp"
-#include "renderer/CullPipeline.hpp"
-#include "core/GPUMesh.hpp"
+#include "renderer/pipelines/StandardPipeline.hpp"
+#include "renderer/pipelines/CullPipeline.hpp"
+#include "geometry/GPUMesh.hpp"
 
 #include <memory>
 #include <vector>
@@ -15,6 +15,8 @@
 // Forward declarations
 class VulkanRenderer;
 class InputController;
+class HzbPipeline;
+class DebugPipeline;
 
 class Engine {
 public:
@@ -49,6 +51,8 @@ private:
     std::unique_ptr<VulkanContext> context;
     std::unique_ptr<StandardPipeline> pipeline;
     std::unique_ptr<CullPipeline> cullPipeline;
+    std::unique_ptr<HzbPipeline> hzbPipeline;
+    std::unique_ptr<DebugPipeline> debugPipeline;
     std::unique_ptr<VulkanRenderer> renderer;
     std::unique_ptr<InputController> inputController;
 
@@ -71,12 +75,20 @@ private:
     std::vector<ModelAsset> models;
     uint32_t activeModelIndex = 0;
 
+    // Toggles and debug configurations
+    bool renderModeNanite = true;
+    bool hzbCullingEnabled = true;
+    bool debugVisualiseHzb = false;
+    uint32_t debugHzbMipLevel = 0;
+    bool drawBoundingSpheres = false;
+
     // Visual verification of culling (Freeze Frustum)
     bool freezeCulling = false;
     glm::vec4 frozenFrustumPlanes[6];
     glm::vec3 frozenCameraPos;
 
-    // Frame timing
+    // Frame timing and telemetry
     float lastFrameTime = 0.0f;
     bool framebufferResized = false;
+    uint32_t telemetryFrameCount = 0;
 };

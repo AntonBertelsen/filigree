@@ -1,4 +1,4 @@
-#include "MeshletBuilder.hpp"
+#include "geometry/MeshletBuilder.hpp"
 #include <meshoptimizer.h>
 #include <iostream>
 
@@ -73,7 +73,7 @@ MeshletData MeshletBuilder::buildMeshlets(const std::vector<MeshVertex>& vertice
         cmd.firstInstance = static_cast<uint32_t>(i);
         
         data.indirectCommands.push_back(cmd);
-
+ 
         // 4. Compute bounds (Sphere & Cone)
         meshopt_Bounds bounds = meshopt_computeMeshletBounds(
             &meshlet_vertices[meshlet.vertex_offset],
@@ -83,13 +83,16 @@ MeshletData MeshletBuilder::buildMeshlets(const std::vector<MeshVertex>& vertice
             vertices.size(),
             sizeof(MeshVertex)
         );
-
+ 
         MeshletBounds b{};
         b.sphereCenterRadius = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
         b.coneAxisCutoff = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
         
         data.boundsList.push_back(b);
     }
+    
+    data.originalVertices = vertices;
+    data.originalIndices = indices;
     
     return data;
 }

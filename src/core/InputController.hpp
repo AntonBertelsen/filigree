@@ -12,6 +12,12 @@ public:
 
     bool isTabPressedThisFrame() const { return tabPressedThisFrame; }
     bool isFPressedThisFrame() const { return fPressedThisFrame; }
+    bool isMPressedThisFrame() const { return mPressedThisFrame; }
+    bool isHPressedThisFrame() const { return hPressedThisFrame; }
+    bool isVPressedThisFrame() const { return vPressedThisFrame; }
+    bool isUpPressedThisFrame() const { return upPressedThisFrame; }
+    bool isDownPressedThisFrame() const { return downPressedThisFrame; }
+    bool isBPressedThisFrame() const { return bPressedThisFrame; }
 
 private:
     GLFWwindow* window = nullptr;
@@ -22,4 +28,22 @@ private:
 
     bool fWasPressed = false;
     bool fPressedThisFrame = false;
+
+    bool mWasPressed = false;
+    bool mPressedThisFrame = false;
+
+    bool hWasPressed = false;
+    bool hPressedThisFrame = false;
+
+    bool vWasPressed = false;
+    bool vPressedThisFrame = false;
+
+    bool upWasPressed = false;
+    bool upPressedThisFrame = false;
+
+    bool downWasPressed = false;
+    bool downPressedThisFrame = false;
+
+    bool bWasPressed = false;
+    bool bPressedThisFrame = false;
 };

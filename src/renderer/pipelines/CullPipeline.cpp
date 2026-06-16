@@ -1,4 +1,4 @@
-#include "CullPipeline.hpp"
+#include "renderer/pipelines/CullPipeline.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -24,7 +24,7 @@ void CullPipeline::createPipeline() {
     VkDevice device = context.getDevice();
 
     // 1. Create Descriptor Set Layout
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
     
     // Binding 0: Input Commands (SSBO)
     bindings[0].binding = 0;
@@ -51,8 +51,22 @@ void CullPipeline::createPipeline() {
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT; // We want vertex shader to access it too for bounds debug
     bindings[3].pImmutableSamplers = nullptr;
+
+    // Binding 4: HZB Texture (Combined Image Sampler)
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[4].pImmutableSamplers = nullptr;
+
+    // Binding 5: Visibilities (SSBO)
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT; // Compute writes, Vertex reads
+    bindings[5].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

@@ -5,14 +5,14 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
-class StandardPipeline {
+class BoundsPipeline {
 public:
-    StandardPipeline(VulkanContext& context);
-    ~StandardPipeline();
+    BoundsPipeline(VulkanContext& context, VkDescriptorSetLayout computeDescriptorSetLayout);
+    ~BoundsPipeline();
 
     // Prevent copying
-    StandardPipeline(const StandardPipeline&) = delete;
-    StandardPipeline& operator=(const StandardPipeline&) = delete;
+    BoundsPipeline(const BoundsPipeline&) = delete;
+    BoundsPipeline& operator=(const BoundsPipeline&) = delete;
 
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
     VkPipeline getGraphicsPipeline() const { return graphicsPipeline; }
@@ -25,6 +25,7 @@ private:
     void cleanup();
 
     VulkanContext& context;
+    VkDescriptorSetLayout computeDescriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
 };

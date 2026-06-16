@@ -12,7 +12,7 @@ struct VkDrawIndexedIndirectCommand {
     uint firstInstance;
 };
 
-// Meshlet bounds structure (packed to avoid std430 alignment pitfalls)
+// Meshlet bounds structure
 struct MeshletBounds {
     vec4 sphereCenterRadius; // xyz = center, w = radius
     vec4 coneAxisCutoff;     // xyz = axis, w = cutoff
@@ -35,11 +35,25 @@ layout(std430, set = 0, binding = 3) readonly buffer Bounds {
     MeshletBounds bounds[];
 };
 
+layout(set = 0, binding = 4) uniform sampler2D hzbTexture;
+
+layout(std430, set = 0, binding = 5) writeonly buffer Visibility {
+    uint visibilities[];
+};
+
 // Push Constants
 layout(push_constant) uniform CullPushConstants {
+    mat4 modelViewProj;
     vec4 frustumPlanes[6];
     vec3 cameraPos;
+    float padding; // Align hzbParams to 16-byte boundary
+    vec4 hzbParams; // x = proj[0][0], y = proj[1][1], z = proj[2][2], w = proj[3][2]
+    float modelScale;
     uint maxDrawCount;
+    uint hzbWidth;
+    uint hzbHeight;
+    uint maxMipLevel;
+    uint hzbCullingEnabled;
 } pcs;
 
 void main() {
@@ -57,10 +71,13 @@ void main() {
     
     // 1. Frustum Culling Test
     bool visible = true;
+    uint visibilityStatus = 1; // 1 = Visible
+    
     for (int i = 0; i < 6; ++i) {
         float dist = dot(pcs.frustumPlanes[i].xyz, center) + pcs.frustumPlanes[i].w;
         if (dist < -radius) {
             visible = false;
+            visibilityStatus = 2; // 2 = Frustum Culled
             break;
         }
     }
@@ -81,9 +98,104 @@ void main() {
             // dot(center - camera, axis) >= cutoff * dist + radius
             if (dot(toCenter, axis) >= cutoff * dist + radius) {
                 visible = false;
+                visibilityStatus = 3; // 3 = Backface Culled
             }
         }
     }
+    
+    // 3. Hierarchical Z-Buffer (HZB) Occlusion Culling Test
+    if (visible && pcs.hzbCullingEnabled != 0) {
+        vec4 C_clip = pcs.modelViewProj * vec4(center, 1.0);
+        
+        if (C_clip.w <= 0.001) {
+            // Keep visible if center is behind camera near plane
+        } else {
+            float P00 = pcs.hzbParams.x;
+            float P11 = pcs.hzbParams.y;
+            float P22 = pcs.hzbParams.z;
+            float P32 = pcs.hzbParams.w;
+            
+            float r = radius * pcs.modelScale;
+            
+            // Reconstruct view-space center
+            // C_clip.w = -C_view.z
+            vec3 C_view = vec3(C_clip.x / P00, C_clip.y / P11, -C_clip.w);
+            
+            // Calculate 8 corners of the view-space bounding box of the sphere
+            vec3 corners_view[8];
+            corners_view[0] = C_view + vec3(-r, -r, -r);
+            corners_view[1] = C_view + vec3( r, -r, -r);
+            corners_view[2] = C_view + vec3(-r,  r, -r);
+            corners_view[3] = C_view + vec3( r,  r, -r);
+            corners_view[4] = C_view + vec3(-r, -r,  r);
+            corners_view[5] = C_view + vec3( r, -r,  r);
+            corners_view[6] = C_view + vec3(-r,  r,  r);
+            corners_view[7] = C_view + vec3( r,  r,  r);
+            
+            float minX = 1.0, maxX = -1.0;
+            float minY = 1.0, maxY = -1.0;
+            float minZ = 1.0;
+            
+            bool intersectsNearPlane = false;
+            for (int i = 0; i < 8; ++i) {
+                if (corners_view[i].z >= -0.01) {
+                    intersectsNearPlane = true;
+                    break;
+                }
+                float w = -corners_view[i].z;
+                float x_ndc = (corners_view[i].x * P00) / w;
+                float y_ndc = (corners_view[i].y * P11) / w;
+                float z_ndc = (P22 * corners_view[i].z + P32) / w;
+                
+                minX = min(minX, x_ndc);
+                maxX = max(maxX, x_ndc);
+                minY = min(minY, y_ndc);
+                maxY = max(maxY, y_ndc);
+                minZ = min(minZ, z_ndc);
+            }
+            
+            if (!intersectsNearPlane) {
+                // Clamp NDC to screen space boundaries
+                minX = clamp(minX, -1.0, 1.0);
+                maxX = clamp(maxX, -1.0, 1.0);
+                minY = clamp(minY, -1.0, 1.0);
+                maxY = clamp(maxY, -1.0, 1.0);
+                minZ = clamp(minZ, 0.0, 1.0);
+                
+                // Map NDC [-1, 1] to UV texture coords [0, 1]
+                float u0 = minX * 0.5 + 0.5;
+                float u1 = maxX * 0.5 + 0.5;
+                float v0 = minY * 0.5 + 0.5;
+                float v1 = maxY * 0.5 + 0.5;
+                
+                // Bounding box size in HZB pixels
+                float width = (u1 - u0) * float(pcs.hzbWidth);
+                float height = (v1 - v0) * float(pcs.hzbHeight);
+                
+                // Determine HZB mip level to sample
+                float maxDim = max(width, height);
+                float mip = ceil(log2(maxDim));
+                int level = clamp(int(mip), 0, int(pcs.maxMipLevel));
+                
+                // Sample furthest depth value in the footprint
+                float d0 = textureLod(hzbTexture, vec2(u0, v0), float(level)).r;
+                float d1 = textureLod(hzbTexture, vec2(u1, v0), float(level)).r;
+                float d2 = textureLod(hzbTexture, vec2(u0, v1), float(level)).r;
+                float d3 = textureLod(hzbTexture, vec2(u1, v1), float(level)).r;
+                
+                float hzbFurthestZ = max(max(d0, d1), max(d2, d3));
+                
+                // If our closest depth is further than the furthest Z-buffer depth in the area, we are occluded!
+                if (minZ > hzbFurthestZ) {
+                    visible = false;
+                    visibilityStatus = 4; // 4 = HZB Occlusion Culled
+                }
+            }
+        }
+    }
+    
+    // Write culling status feedback for bounds visualizer
+    visibilities[gID] = visibilityStatus;
     
     // If visible, write to output buffer
     if (visible) {

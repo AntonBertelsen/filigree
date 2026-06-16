@@ -2,6 +2,7 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
+    uint isNaniteMode;
 } pcs;
 
 // Vertex inputs from vertex buffer
@@ -17,13 +18,17 @@ void main() {
     // Transform vertex position to clip space
     gl_Position = pcs.viewProj * vec4(inPosition, 1.0);
     
-    // Calculate color based on gl_InstanceIndex (offset by 1 so index 0 is not pure black)
-    uint meshletID = uint(gl_InstanceIndex) + 1;
-    float r = float((meshletID * 17) % 255) / 255.0;
-    float g = float((meshletID * 59) % 255) / 255.0;
-    float b = float((meshletID * 97) % 255) / 255.0;
+    if (pcs.isNaniteMode == 1) {
+        // Calculate color based on gl_InstanceIndex (offset by 1 so index 0 is not pure black)
+        uint meshletID = uint(gl_InstanceIndex) + 1;
+        float r = float((meshletID * 17) % 255) / 255.0;
+        float g = float((meshletID * 59) % 255) / 255.0;
+        float b = float((meshletID * 97) % 255) / 255.0;
+        fragColor = vec3(r, g, b);
+    } else {
+        fragColor = vec3(0.0); // 0.0 triggers fallback to grey in fragment shader
+    }
     
-    fragColor = vec3(r, g, b);
     fragNormal = inNormal;
 }
 

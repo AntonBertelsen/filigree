@@ -1,10 +1,14 @@
 #include "VulkanRenderer.hpp"
 #include "core/Engine.hpp"
+#include "renderer/pipelines/HzbPipeline.hpp"
+#include "renderer/pipelines/DebugPipeline.hpp"
 #include <stdexcept>
 #include <array>
 
 VulkanRenderer::VulkanRenderer(VulkanContext& context, StandardPipeline& pipeline, CullPipeline& cullPipeline)
-    : context(context), pipeline(pipeline), cullPipeline(cullPipeline) {}
+    : context(context), pipeline(pipeline), cullPipeline(cullPipeline) {
+    boundsPipeline = std::make_unique<BoundsPipeline>(context, cullPipeline.getDescriptorSetLayout());
+}
 
 void VulkanRenderer::drawFrame(Engine& engine) {
     VkDevice device = context.getDevice();
@@ -153,9 +157,10 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
     vkCmdPipelineBarrier2(cb, &dependencyInfo);
 
-    // 2. GPU Compute Pass for Culling (executed outside of rendering pass)
+    // 2. GPU Compute Pass for Culling (executed outside of rendering pass if Nanite rendering is enabled)
     float aspect = static_cast<float>(context.getSwapChainExtent().width) / static_cast<float>(context.getSwapChainExtent().height);
-    glm::mat4 viewProj = engine.cameraNode->getProjectionMatrix(aspect) * engine.cameraNode->getViewMatrix();
+    glm::mat4 proj = engine.cameraNode->getProjectionMatrix(aspect);
+    glm::mat4 viewProj = proj * engine.cameraNode->getViewMatrix();
     
     glm::mat4 modelMatrix = glm::mat4(1.0f);
     VkBuffer activeVertexBuffer = VK_NULL_HANDLE;
@@ -201,21 +206,52 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
         // Manage frustum freeze state for visualization
         static bool wasFrozen = false;
+        static CullPushConstants frozenCullPcs{};
+
+        CullPushConstants cullPcs{};
+
         if (engine.freezeCulling) {
             if (!wasFrozen) {
+                frozenCullPcs.modelViewProj = viewProj * modelMatrix;
                 for (int i = 0; i < 6; ++i) {
-                    engine.frozenFrustumPlanes[i] = planes[i];
+                    frozenCullPcs.frustumPlanes[i] = planes[i];
                 }
-                engine.frozenCameraPos = modelSpaceCameraPos;
+                frozenCullPcs.cameraPos = modelSpaceCameraPos;
+                
+                // Calculate model scale
+                float scaleX = glm::length(glm::vec3(modelMatrix[0]));
+                float scaleY = glm::length(glm::vec3(modelMatrix[1]));
+                float scaleZ = glm::length(glm::vec3(modelMatrix[2]));
+                frozenCullPcs.modelScale = std::max({scaleX, scaleY, scaleZ});
+                
+                // Calculate hzbParams (proj[0][0], proj[1][1], proj[2][2], proj[3][2])
+                frozenCullPcs.hzbParams = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
+                
                 wasFrozen = true;
             }
-            for (int i = 0; i < 6; ++i) {
-                planes[i] = engine.frozenFrustumPlanes[i];
-            }
-            modelSpaceCameraPos = engine.frozenCameraPos;
+            cullPcs = frozenCullPcs;
         } else {
             wasFrozen = false;
+            
+            cullPcs.modelViewProj = viewProj * modelMatrix;
+            for (int i = 0; i < 6; ++i) {
+                cullPcs.frustumPlanes[i] = planes[i];
+            }
+            cullPcs.cameraPos = modelSpaceCameraPos;
+            
+            float scaleX = glm::length(glm::vec3(modelMatrix[0]));
+            float scaleY = glm::length(glm::vec3(modelMatrix[1]));
+            float scaleZ = glm::length(glm::vec3(modelMatrix[2]));
+            cullPcs.modelScale = std::max({scaleX, scaleY, scaleZ});
+            
+            cullPcs.hzbParams = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
         }
+
+        cullPcs.maxDrawCount = mesh.clusterCount;
+        cullPcs.hzbWidth = VulkanContext::HZB_WIDTH;
+        cullPcs.hzbHeight = VulkanContext::HZB_HEIGHT;
+        cullPcs.maxMipLevel = VulkanContext::HZB_MIP_LEVELS - 1;
+        cullPcs.hzbCullingEnabled = engine.hzbCullingEnabled ? 1 : 0;
 
         // 2a. Reset draw count atomic buffer
         vkCmdFillBuffer(cb, mesh.drawCountBuffer[currentFrame], 0, sizeof(uint32_t), 0);
@@ -240,13 +276,6 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
         // 2b. Dispatch compute shader
         cullPipeline.bind(cb);
-
-        CullPushConstants cullPcs{};
-        for (int i = 0; i < 6; ++i) {
-            cullPcs.frustumPlanes[i] = planes[i];
-        }
-        cullPcs.cameraPos = modelSpaceCameraPos;
-        cullPcs.maxDrawCount = mesh.clusterCount;
 
         vkCmdBindDescriptorSets(
             cb,
@@ -310,6 +339,8 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = { 1.0f, 0 }; // Clear to 1.0 (far plane)
 
+    bool debugView = engine.debugVisualiseHzb;
+
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea.offset = {0, 0};
@@ -317,54 +348,251 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttachment;
-    renderingInfo.pDepthAttachment = &depthAttachment;
+    renderingInfo.pDepthAttachment = &depthAttachment; // Always write depth to generate correct HZB
 
     vkCmdBeginRendering(cb, &renderingInfo);
 
-    // 4. Bind the Graphics Pipeline
-    pipeline.bind(cb);
-
-    // 5. Set Dynamic Viewport & Scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(context.getSwapChainExtent().width);
-    viewport.height = static_cast<float>(context.getSwapChainExtent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cb, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = context.getSwapChainExtent();
-    vkCmdSetScissor(cb, 0, 1, &scissor);
-
-    // 6. Push Combined MVP Matrix
-    glm::mat4 mvp = viewProj * modelMatrix;
-    pipeline.pushConstants(cb, mvp);
-
-    // 7. Bind Vertex and Index Buffers
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
-    vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT16); // Reconstructed indices are local uint16_t
-
-    // 8. Draw the Mesh via Multi-Draw Indirect Count
     if (activeAsset) {
-        vkCmdDrawIndexedIndirectCount(
-            cb,
-            activeAsset->gpuMesh.culledIndirectBuffer[currentFrame],
-            0,
-            activeAsset->gpuMesh.drawCountBuffer[currentFrame],
-            0,
-            activeAsset->gpuMesh.clusterCount,
-            sizeof(VkDrawIndexedIndirectCommand)
-        );
+        // 4b. Bind standard Graphics Pipeline
+        pipeline.bind(cb);
+
+        // Set Dynamic Viewport & Scissor
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(context.getSwapChainExtent().width);
+        viewport.height = static_cast<float>(context.getSwapChainExtent().height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cb, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = context.getSwapChainExtent();
+        vkCmdSetScissor(cb, 0, 1, &scissor);
+
+        // Push Standard Push Constants (viewProj & render mode)
+        StandardPipeline::StandardPushConstants standardPcs{};
+        standardPcs.viewProj = viewProj * modelMatrix;
+        standardPcs.isNaniteMode = engine.renderModeNanite ? 1 : 0;
+        pipeline.pushConstants(cb, standardPcs);
+
+        if (engine.renderModeNanite) {
+            // Bind Meshlet (flat) vertex and index buffers
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
+            vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT16); // Local uint16_t indices
+
+            // Draw via Multi-Draw Indirect Count
+            vkCmdDrawIndexedIndirectCount(
+                cb,
+                activeAsset->gpuMesh.culledIndirectBuffer[currentFrame],
+                0,
+                activeAsset->gpuMesh.drawCountBuffer[currentFrame],
+                0,
+                activeAsset->gpuMesh.clusterCount,
+                sizeof(VkDrawIndexedIndirectCommand)
+            );
+        } else {
+            // Bind Traditional (unclustered) vertex and index buffers
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cb, 0, 1, &activeAsset->gpuMesh.traditionalVertexBuffer, offsets);
+            vkCmdBindIndexBuffer(cb, activeAsset->gpuMesh.traditionalIndexBuffer, 0, VK_INDEX_TYPE_UINT32); // Original 32-bit indices
+
+            // Draw unclustered model in a single standard draw call
+            vkCmdDrawIndexed(cb, activeAsset->gpuMesh.traditionalIndexCount, 1, 0, 0, 0);
+        }
+
+        // 4c. Bounding spheres debug rendering if enabled
+        if (engine.drawBoundingSpheres) {
+            boundsPipeline->bind(cb);
+
+            boundsPipeline->pushConstants(cb, viewProj * modelMatrix);
+
+            vkCmdBindDescriptorSets(
+                cb,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                boundsPipeline->getPipelineLayout(),
+                0,
+                1,
+                &activeAsset->gpuMesh.computeDescriptorSets[currentFrame],
+                0,
+                nullptr
+            );
+
+            // Draw 3 circles * 16 segments * 2 vertices = 96 vertices
+            vkCmdDraw(cb, 96, activeAsset->gpuMesh.clusterCount, 0, 0);
+        }
     }
 
-    // 9. End Dynamic Rendering
+    // 5. End Dynamic Rendering
     vkCmdEndRendering(cb);
 
-    // 8. Transition swapchain image layout from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+    // 6. Generate Hierarchical Z-Buffer (HZB) for the next frame's culling
+    // Transition depth buffer to SHADER_READ_ONLY_OPTIMAL and current HZB to GENERAL layout
+    VkImageMemoryBarrier2 depthToReadBarrier{};
+    depthToReadBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    depthToReadBarrier.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    depthToReadBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthToReadBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    depthToReadBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    depthToReadBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthToReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthToReadBarrier.image = context.getDepthImage();
+    depthToReadBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthToReadBarrier.subresourceRange.baseMipLevel = 0;
+    depthToReadBarrier.subresourceRange.levelCount = 1;
+    depthToReadBarrier.subresourceRange.baseArrayLayer = 0;
+    depthToReadBarrier.subresourceRange.layerCount = 1;
+
+    VkImageMemoryBarrier2 hzbToGeneralBarrier{};
+    hzbToGeneralBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    hzbToGeneralBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    hzbToGeneralBarrier.srcAccessMask = 0;
+    hzbToGeneralBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    hzbToGeneralBarrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
+    hzbToGeneralBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    hzbToGeneralBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    hzbToGeneralBarrier.image = context.getHzbImage(currentFrame);
+    hzbToGeneralBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    hzbToGeneralBarrier.subresourceRange.baseMipLevel = 0;
+    hzbToGeneralBarrier.subresourceRange.levelCount = VulkanContext::HZB_MIP_LEVELS;
+    hzbToGeneralBarrier.subresourceRange.baseArrayLayer = 0;
+    hzbToGeneralBarrier.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo initDep{};
+    initDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    VkImageMemoryBarrier2 initBarriers[2] = { depthToReadBarrier, hzbToGeneralBarrier };
+    initDep.imageMemoryBarrierCount = 2;
+    initDep.pImageMemoryBarriers = initBarriers;
+    vkCmdPipelineBarrier2(cb, &initDep);
+
+    // Run Level 0 and mip downsampling dispatches ONLY if culling is not frozen
+    if (!engine.freezeCulling) {
+        // Run Level 0 downsampling (Read from Depth image -> Write to HZB Level 0)
+        VkExtent2D swapExtent = context.getSwapChainExtent();
+        engine.hzbPipeline->recordDispatch(cb, currentFrame, 0, swapExtent.width, swapExtent.height, -1);
+
+        // Run Levels 1 to 10 downsampling (Read from HZB Level L-1 -> Write to HZB Level L)
+        for (uint32_t L = 1; L < VulkanContext::HZB_MIP_LEVELS; L++) {
+            VkImageMemoryBarrier2 lvlBarrier{};
+            lvlBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            lvlBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            lvlBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            lvlBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            lvlBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            lvlBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            lvlBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            lvlBarrier.image = context.getHzbImage(currentFrame);
+            lvlBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            lvlBarrier.subresourceRange.baseMipLevel = L - 1;
+            lvlBarrier.subresourceRange.levelCount = 1;
+            lvlBarrier.subresourceRange.baseArrayLayer = 0;
+            lvlBarrier.subresourceRange.layerCount = 1;
+
+            VkDependencyInfo lvlDep{};
+            lvlDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            lvlDep.imageMemoryBarrierCount = 1;
+            lvlDep.pImageMemoryBarriers = &lvlBarrier;
+            vkCmdPipelineBarrier2(cb, &lvlDep);
+
+            uint32_t srcWidth = std::max(1u, VulkanContext::HZB_WIDTH >> (L - 1));
+            uint32_t srcHeight = std::max(1u, VulkanContext::HZB_HEIGHT >> (L - 1));
+            engine.hzbPipeline->recordDispatch(cb, currentFrame, L, srcWidth, srcHeight, L - 1);
+        }
+    }
+
+
+    // Transition depth buffer back to attachment layout and HZB to shader read optimal layout
+    VkImageMemoryBarrier2 depthToAttachmentBarrier{};
+    depthToAttachmentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    depthToAttachmentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    depthToAttachmentBarrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    depthToAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    depthToAttachmentBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthToAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthToAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthToAttachmentBarrier.image = context.getDepthImage();
+    depthToAttachmentBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthToAttachmentBarrier.subresourceRange.baseMipLevel = 0;
+    depthToAttachmentBarrier.subresourceRange.levelCount = 1;
+    depthToAttachmentBarrier.subresourceRange.baseArrayLayer = 0;
+    depthToAttachmentBarrier.subresourceRange.layerCount = 1;
+
+    VkImageMemoryBarrier2 hzbToReadOnlyBarrier{};
+    hzbToReadOnlyBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    hzbToReadOnlyBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    hzbToReadOnlyBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    hzbToReadOnlyBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    hzbToReadOnlyBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    hzbToReadOnlyBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    hzbToReadOnlyBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    hzbToReadOnlyBarrier.image = context.getHzbImage(currentFrame);
+    hzbToReadOnlyBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    hzbToReadOnlyBarrier.subresourceRange.baseMipLevel = 0;
+    hzbToReadOnlyBarrier.subresourceRange.levelCount = VulkanContext::HZB_MIP_LEVELS;
+    hzbToReadOnlyBarrier.subresourceRange.baseArrayLayer = 0;
+    hzbToReadOnlyBarrier.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo finalDep{};
+    finalDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    VkImageMemoryBarrier2 finalBarriers[2] = { depthToAttachmentBarrier, hzbToReadOnlyBarrier };
+    finalDep.imageMemoryBarrierCount = 2;
+    finalDep.pImageMemoryBarriers = finalBarriers;
+    vkCmdPipelineBarrier2(cb, &finalDep);
+
+    // 6.5. Draw HZB Debug Fullscreen Quad if debug view is enabled
+    if (engine.debugVisualiseHzb) {
+        VkRenderingAttachmentInfo debugColorAttachment{};
+        debugColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        debugColorAttachment.imageView = context.getSwapChainImageViews()[imageIndex];
+        debugColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        debugColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear the mesh rendering
+        debugColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        debugColorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+
+        VkRenderingInfo debugRenderingInfo{};
+        debugRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        debugRenderingInfo.renderArea.offset = {0, 0};
+        debugRenderingInfo.renderArea.extent = context.getSwapChainExtent();
+        debugRenderingInfo.layerCount = 1;
+        debugRenderingInfo.colorAttachmentCount = 1;
+        debugRenderingInfo.pColorAttachments = &debugColorAttachment;
+        debugRenderingInfo.pDepthAttachment = nullptr;
+
+        vkCmdBeginRendering(cb, &debugRenderingInfo);
+
+        engine.debugPipeline->bind(cb);
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(context.getSwapChainExtent().width);
+        viewport.height = static_cast<float>(context.getSwapChainExtent().height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cb, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = context.getSwapChainExtent();
+        vkCmdSetScissor(cb, 0, 1, &scissor);
+
+        VkDescriptorSet ds = engine.debugPipeline->getDescriptorSet(currentFrame);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, engine.debugPipeline->getPipelineLayout(), 0, 1, &ds, 0, nullptr);
+
+        DebugPushConstants debugPcs{};
+        debugPcs.mipLevel = engine.debugHzbMipLevel;
+        debugPcs.nearPlane = engine.cameraNode->getNearPlane();
+        debugPcs.farPlane = engine.cameraNode->getFarPlane();
+        engine.debugPipeline->pushConstants(cb, debugPcs);
+
+        vkCmdDraw(cb, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cb);
+    }
+
+    // 7. Transition swapchain image layout from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
     VkImageMemoryBarrier2 presentBarrier{};
     presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     presentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;

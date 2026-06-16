@@ -33,19 +33,25 @@ set(SOURCES
     src/scene/CameraNode.cpp
     src/scene/MeshNode.hpp
     src/scene/MeshNode.cpp
-    src/renderer/StandardPipeline.hpp
-    src/renderer/StandardPipeline.cpp
-    src/renderer/CullPipeline.hpp
-    src/renderer/CullPipeline.cpp
-    src/renderer/MeshletBuilder.hpp
-    src/renderer/MeshletBuilder.cpp
-    src/core/GPUMesh.hpp
-    src/core/GPUMeshUploader.hpp
-    src/core/GPUMeshUploader.cpp
+    src/renderer/pipelines/StandardPipeline.hpp
+    src/renderer/pipelines/StandardPipeline.cpp
+    src/renderer/pipelines/CullPipeline.hpp
+    src/renderer/pipelines/CullPipeline.cpp
+    src/geometry/MeshletBuilder.hpp
+    src/geometry/MeshletBuilder.cpp
+    src/geometry/GPUMesh.hpp
+    src/geometry/GPUMeshUploader.hpp
+    src/geometry/GPUMeshUploader.cpp
     src/core/InputController.hpp
     src/core/InputController.cpp
     src/renderer/VulkanRenderer.hpp
     src/renderer/VulkanRenderer.cpp
+    src/renderer/pipelines/HzbPipeline.hpp
+    src/renderer/pipelines/HzbPipeline.cpp
+    src/renderer/pipelines/DebugPipeline.hpp
+    src/renderer/pipelines/DebugPipeline.cpp
+    src/renderer/pipelines/BoundsPipeline.hpp
+    src/renderer/pipelines/BoundsPipeline.cpp
 )
 
 # 4. Define our executable target
@@ -86,6 +92,11 @@ set(SHADER_SPV_OUTPUTS
     "${CMAKE_BINARY_DIR}/bin/shaders/vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/frag.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/cull.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/hzb.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/debug_vert.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/debug_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/bounds_vert.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
 )
 
 # Create output shader directory in the build folder
@@ -113,6 +124,46 @@ add_custom_command(
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp" -o "${CMAKE_BINARY_DIR}/bin/shaders/cull.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/cull.comp"
     COMMENT "Compiling compute shader to SPIR-V..."
+)
+
+# Custom command to compile hzb compute shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/hzb.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hzb.comp" -o "${CMAKE_BINARY_DIR}/bin/shaders/hzb.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hzb.comp"
+    COMMENT "Compiling HZB compute shader to SPIR-V..."
+)
+
+# Custom command to compile debug vertex shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/debug_vert.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debug.vert" -o "${CMAKE_BINARY_DIR}/bin/shaders/debug_vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debug.vert"
+    COMMENT "Compiling debug vertex shader to SPIR-V..."
+)
+
+# Custom command to compile debug fragment shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/debug_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debug.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/debug_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debug.frag"
+    COMMENT "Compiling debug fragment shader to SPIR-V..."
+)
+
+# Custom command to compile bounds vertex shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/bounds_vert.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.vert" -o "${CMAKE_BINARY_DIR}/bin/shaders/bounds_vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.vert"
+    COMMENT "Compiling bounds vertex shader to SPIR-V..."
+)
+
+# Custom command to compile bounds fragment shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.frag"
+    COMMENT "Compiling bounds fragment shader to SPIR-V..."
 )
 
 # Create a target for shaders that our main executable depends on

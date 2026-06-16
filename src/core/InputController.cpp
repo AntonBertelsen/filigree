@@ -28,4 +28,64 @@ void InputController::update(float deltaTime) {
         }
         fWasPressed = currentFState;
     }
+
+    // 4. Poll M Key (Cycle models)
+    mPressedThisFrame = false;
+    if (window) {
+        bool currentMState = (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS);
+        if (currentMState && !mWasPressed) {
+            mPressedThisFrame = true;
+        }
+        mWasPressed = currentMState;
+    }
+
+    // 5. Poll H Key (Toggle HZB culling)
+    hPressedThisFrame = false;
+    if (window) {
+        bool currentHState = (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS);
+        if (currentHState && !hWasPressed) {
+            hPressedThisFrame = true;
+        }
+        hWasPressed = currentHState;
+    }
+
+    // 6. Poll V Key (Toggle HZB visualizer)
+    vPressedThisFrame = false;
+    if (window) {
+        bool currentVState = (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS);
+        if (currentVState && !vWasPressed) {
+            vPressedThisFrame = true;
+        }
+        vWasPressed = currentVState;
+    }
+
+    // 7. Poll Up Key (Increment HZB mip level)
+    upPressedThisFrame = false;
+    if (window) {
+        bool currentUpState = (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS);
+        if (currentUpState && !upWasPressed) {
+            upPressedThisFrame = true;
+        }
+        upWasPressed = currentUpState;
+    }
+
+    // 8. Poll Down Key (Decrement HZB mip level)
+    downPressedThisFrame = false;
+    if (window) {
+        bool currentDownState = (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS);
+        if (currentDownState && !downWasPressed) {
+            downPressedThisFrame = true;
+        }
+        downWasPressed = currentDownState;
+    }
+
+    // 9. Poll B Key (Toggle bounding spheres visualizer)
+    bPressedThisFrame = false;
+    if (window) {
+        bool currentBState = (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS);
+        if (currentBState && !bWasPressed) {
+            bPressedThisFrame = true;
+        }
+        bWasPressed = currentBState;
+    }
 }

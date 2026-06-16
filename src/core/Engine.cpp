@@ -1,17 +1,22 @@
 #include "Engine.hpp"
 #include "renderer/VulkanRenderer.hpp"
-#include "renderer/MeshletBuilder.hpp"
-#include "core/GPUMeshUploader.hpp"
+#include "geometry/MeshletBuilder.hpp"
+#include "geometry/GPUMeshUploader.hpp"
 #include "core/InputController.hpp"
+#include "renderer/pipelines/HzbPipeline.hpp"
+#include "renderer/pipelines/DebugPipeline.hpp"
 
 #include <iostream>
 #include <stdexcept>
+#include <array>
 
 Engine::Engine() {
     initWindow();
     context = std::make_unique<VulkanContext>(window);
     pipeline = std::make_unique<StandardPipeline>(*context);
     cullPipeline = std::make_unique<CullPipeline>(*context);
+    hzbPipeline = std::make_unique<HzbPipeline>(*context);
+    debugPipeline = std::make_unique<DebugPipeline>(*context);
     renderer = std::make_unique<VulkanRenderer>(*context, *pipeline, *cullPipeline);
     
     rootNode = std::make_unique<Node>();
@@ -23,14 +28,16 @@ Engine::Engine() {
     inputController = std::make_unique<InputController>(window, cameraNode);
 
     // Allocate compute descriptor pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 24; // 4 bindings * 2 frames in flight * 3 models
+    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[0].descriptorCount = 24; // 4 bindings * 2 frames in flight * 3 models
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = 6; // 1 binding * 2 frames in flight * 3 models
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = 8;
 
     if (vkCreateDescriptorPool(context->getDevice(), &poolInfo, nullptr, &computeDescriptorPool) != VK_SUCCESS) {
@@ -139,13 +146,70 @@ void Engine::mainLoop() {
         inputController->update(deltaTime);
         
         if (inputController->isTabPressedThisFrame()) {
+            renderModeNanite = !renderModeNanite;
+            std::cout << "[Mode Switch] Render mode changed to: " << (renderModeNanite ? "NANITE" : "TRADITIONAL") << std::endl;
+        }
+
+        if (inputController->isMPressedThisFrame()) {
             activeModelIndex = (activeModelIndex + 1) % models.size();
-            std::cout << "Active model switched to: " << models[activeModelIndex].name << std::endl;
+            std::cout << "[Asset Switch] Active model cycled to: " << models[activeModelIndex].name << std::endl;
+        }
+
+        if (inputController->isHPressedThisFrame()) {
+            hzbCullingEnabled = !hzbCullingEnabled;
+            std::cout << "[HZB Culling] Occlusion culling: " << (hzbCullingEnabled ? "ENABLED" : "DISABLED") << std::endl;
+        }
+
+        if (inputController->isVPressedThisFrame()) {
+            debugVisualiseHzb = !debugVisualiseHzb;
+            std::cout << "[HZB Visualizer] Debug view: " << (debugVisualiseHzb ? "ENABLED" : "DISABLED") << std::endl;
+        }
+
+        if (inputController->isUpPressedThisFrame()) {
+            if (debugHzbMipLevel < 10) {
+                debugHzbMipLevel++;
+                std::cout << "[HZB Visualizer] Mip level incremented to: " << debugHzbMipLevel << " (" << std::max(1u, 1024u >> debugHzbMipLevel) << "x" << std::max(1u, 1024u >> debugHzbMipLevel) << ")" << std::endl;
+            }
+        }
+
+        if (inputController->isDownPressedThisFrame()) {
+            if (debugHzbMipLevel > 0) {
+                debugHzbMipLevel--;
+                std::cout << "[HZB Visualizer] Mip level decremented to: " << debugHzbMipLevel << " (" << std::max(1u, 1024u >> debugHzbMipLevel) << "x" << std::max(1u, 1024u >> debugHzbMipLevel) << ")" << std::endl;
+            }
         }
 
         if (inputController->isFPressedThisFrame()) {
             freezeCulling = !freezeCulling;
             std::cout << "[Culling State] Freeze culling: " << (freezeCulling ? "ENABLED" : "DISABLED") << std::endl;
+        }
+
+        if (inputController->isBPressedThisFrame()) {
+            drawBoundingSpheres = !drawBoundingSpheres;
+            std::cout << "[Debug Bounds] Bounding spheres visualization: " << (drawBoundingSpheres ? "ENABLED" : "DISABLED") << std::endl;
+        }
+
+        // Print telemetry once every 60 frames
+        telemetryFrameCount++;
+        if (telemetryFrameCount >= 60) {
+            telemetryFrameCount = 0;
+            if (activeModelIndex < models.size()) {
+                const auto& activeAsset = models[activeModelIndex];
+                uint32_t drawCount = 0;
+                uint32_t currentFrame = context->getCurrentFrameIndex();
+                
+                void* mappedData;
+                vmaMapMemory(context->getAllocator(), activeAsset.gpuMesh.drawCountAllocation[currentFrame], &mappedData);
+                drawCount = *static_cast<uint32_t*>(mappedData);
+                vmaUnmapMemory(context->getAllocator(), activeAsset.gpuMesh.drawCountAllocation[currentFrame]);
+                
+                std::cout << "[Telemetry] Render Mode: " << (renderModeNanite ? "NANITE" : "TRADITIONAL")
+                          << " | Model: " << activeAsset.name
+                          << " | Meshlets Drawn: " << (renderModeNanite ? std::to_string(drawCount) : "N/A (All)")
+                          << " / " << activeAsset.gpuMesh.clusterCount
+                          << " | HZB Occlusion Culling: " << (hzbCullingEnabled ? "ON" : "OFF")
+                          << std::endl;
+            }
         }
 
         // Update Scene Graph
@@ -177,6 +241,14 @@ void Engine::cleanup() {
                 vmaDestroyBuffer(allocator, asset.gpuMesh.indexBuffer, asset.gpuMesh.indexAllocation);
                 asset.gpuMesh.indexBuffer = VK_NULL_HANDLE;
             }
+            if (asset.gpuMesh.traditionalVertexBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, asset.gpuMesh.traditionalVertexBuffer, asset.gpuMesh.traditionalVertexAllocation);
+                asset.gpuMesh.traditionalVertexBuffer = VK_NULL_HANDLE;
+            }
+            if (asset.gpuMesh.traditionalIndexBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, asset.gpuMesh.traditionalIndexBuffer, asset.gpuMesh.traditionalIndexAllocation);
+                asset.gpuMesh.traditionalIndexBuffer = VK_NULL_HANDLE;
+            }
             if (asset.gpuMesh.indirectBuffer != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, asset.gpuMesh.indirectBuffer, asset.gpuMesh.indirectAllocation);
                 asset.gpuMesh.indirectBuffer = VK_NULL_HANDLE;
@@ -192,11 +264,20 @@ void Engine::cleanup() {
                     asset.gpuMesh.drawCountBuffer[i] = VK_NULL_HANDLE;
                     asset.gpuMesh.drawCountAllocation[i] = VK_NULL_HANDLE;
                 }
+                if (asset.gpuMesh.visibilityBuffer[i] != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(allocator, asset.gpuMesh.visibilityBuffer[i], asset.gpuMesh.visibilityAllocation[i]);
+                    asset.gpuMesh.visibilityBuffer[i] = VK_NULL_HANDLE;
+                    asset.gpuMesh.visibilityAllocation[i] = VK_NULL_HANDLE;
+                }
             }
             if (asset.gpuMesh.boundsBuffer != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, asset.gpuMesh.boundsBuffer, asset.gpuMesh.boundsAllocation);
                 asset.gpuMesh.boundsBuffer = VK_NULL_HANDLE;
                 asset.gpuMesh.boundsAllocation = VK_NULL_HANDLE;
+            }
+            if (asset.gpuMesh.hzbSampler != VK_NULL_HANDLE) {
+                vkDestroySampler(context->getDevice(), asset.gpuMesh.hzbSampler, nullptr);
+                asset.gpuMesh.hzbSampler = VK_NULL_HANDLE;
             }
         }
     }
@@ -211,6 +292,8 @@ void Engine::cleanup() {
     // Release pipelines, sub-systems and context
     inputController.reset();
     renderer.reset();
+    debugPipeline.reset();
+    hzbPipeline.reset();
     cullPipeline.reset();
     pipeline.reset();
     context.reset();
@@ -233,6 +316,17 @@ void Engine::recreateSwapChain() {
 
     vkDeviceWaitIdle(context->getDevice());
     context->recreateSwapChain();
+
+    if (hzbPipeline) {
+        hzbPipeline->updateDescriptorSets();
+    }
+    if (debugPipeline) {
+        debugPipeline->updateDescriptorSets();
+    }
+
+    for (auto& asset : models) {
+        GPUMeshUploader::updateDescriptorSets(*context, asset.gpuMesh);
+    }
 }
 
 void Engine::handleWindowRefresh() {

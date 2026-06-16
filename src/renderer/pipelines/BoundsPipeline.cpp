@@ -1,32 +1,33 @@
-#include "StandardPipeline.hpp"
-#include "scene/MeshNode.hpp"
+#include "renderer/pipelines/BoundsPipeline.hpp"
 
 #include <iostream>
 #include <stdexcept>
 #include <array>
+#include <vector>
 
-StandardPipeline::StandardPipeline(VulkanContext& context) : context(context) {
+BoundsPipeline::BoundsPipeline(VulkanContext& context, VkDescriptorSetLayout computeDescriptorSetLayout)
+    : context(context), computeDescriptorSetLayout(computeDescriptorSetLayout) {
     createPipeline();
 }
 
-StandardPipeline::~StandardPipeline() {
+BoundsPipeline::~BoundsPipeline() {
     cleanup();
 }
 
-void StandardPipeline::bind(VkCommandBuffer cb) {
+void BoundsPipeline::bind(VkCommandBuffer cb) {
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 }
 
-void StandardPipeline::pushConstants(VkCommandBuffer cb, const glm::mat4& viewProj) {
+void BoundsPipeline::pushConstants(VkCommandBuffer cb, const glm::mat4& viewProj) {
     vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
 }
 
-void StandardPipeline::createPipeline() {
+void BoundsPipeline::createPipeline() {
     VkDevice device = context.getDevice();
 
     // 1. Load Compiled SPIR-V shaders
-    auto vertShaderCode = VulkanContext::readFile(SHADERS_DIR "vert.spv");
-    auto fragShaderCode = VulkanContext::readFile(SHADERS_DIR "frag.spv");
+    auto vertShaderCode = VulkanContext::readFile(SHADERS_DIR "bounds_vert.spv");
+    auto fragShaderCode = VulkanContext::readFile(SHADERS_DIR "bounds_frag.spv");
 
     VkShaderModule vertShaderModule = context.createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = context.createShaderModule(fragShaderCode);
@@ -46,40 +47,16 @@ void StandardPipeline::createPipeline() {
 
     VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
-    // 3. Configure Vertex Input state to read MeshVertex attributes
-    static VkVertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(MeshVertex);
-    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    static std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
-    // Position
-    attributeDescriptions[0].binding = 0;
-    attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[0].offset = offsetof(MeshVertex, pos);
-    // Normal
-    attributeDescriptions[1].binding = 0;
-    attributeDescriptions[1].location = 1;
-    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[1].offset = offsetof(MeshVertex, normal);
-    // TexCoord
-    attributeDescriptions[2].binding = 0;
-    attributeDescriptions[2].location = 2;
-    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[2].offset = offsetof(MeshVertex, texCoord);
-
+    // 3. Configure Vertex Input state (Empty since generated inside shader)
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+    vertexInputInfo.vertexBindingDescriptionCount = 0;
+    vertexInputInfo.vertexAttributeDescriptionCount = 0;
 
-    // 4. Configure Input Assembly
+    // 4. Configure Input Assembly for LINE_LIST
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     // 5. Configure Dynamic States (Viewport and Scissor)
@@ -104,8 +81,8 @@ void StandardPipeline::createPipeline() {
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.lineWidth = 1.0f; // standard debug line width
+    rasterizer.cullMode = VK_CULL_MODE_NONE; // no backface culling for wireframe spheres
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -135,20 +112,20 @@ void StandardPipeline::createPipeline() {
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pSetLayouts = nullptr;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &computeDescriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create pipeline layout!");
+        throw std::runtime_error("Failed to create bounds pipeline layout!");
     }
 
-    // 10. Configure Depth Stencil State
+    // 10. Configure Depth Stencil State (Depth test enabled, Depth write disabled)
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE; // Draw lines without overwriting depth buffer
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
@@ -181,17 +158,17 @@ void StandardPipeline::createPipeline() {
     pipelineInfo.subpass = 0;
 
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create graphics pipeline!");
+        throw std::runtime_error("Failed to create bounds graphics pipeline!");
     }
 
     // Clean up shader modules
     vkDestroyShaderModule(device, fragShaderModule, nullptr);
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 
-    std::cout << "Successfully created Vulkan graphics pipeline inside StandardPipeline!" << std::endl;
+    std::cout << "Successfully created Vulkan graphics pipeline inside BoundsPipeline!" << std::endl;
 }
 
-void StandardPipeline::cleanup() {
+void BoundsPipeline::cleanup() {
     VkDevice device = context.getDevice();
     if (graphicsPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, graphicsPipeline, nullptr);

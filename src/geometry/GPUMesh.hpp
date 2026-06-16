@@ -28,5 +28,18 @@ struct GPUMesh {
     // Compute descriptor sets (one per frame in flight)
     VkDescriptorSet computeDescriptorSets[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 
+    VkSampler hzbSampler = VK_NULL_HANDLE;
     uint32_t clusterCount = 0;
+    uint32_t totalIndexCount = 0;
+
+    // Traditional rendering resources
+    VkBuffer traditionalVertexBuffer = VK_NULL_HANDLE;
+    VmaAllocation traditionalVertexAllocation = VK_NULL_HANDLE;
+    VkBuffer traditionalIndexBuffer = VK_NULL_HANDLE;
+    VmaAllocation traditionalIndexAllocation = VK_NULL_HANDLE;
+    uint32_t traditionalIndexCount = 0;
+
+    // Double-buffered visibility buffer (debug feedback)
+    VkBuffer visibilityBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VmaAllocation visibilityAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 };

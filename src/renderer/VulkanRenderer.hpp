@@ -1,8 +1,11 @@
 #pragma once
 
 #include "core/VulkanContext.hpp"
-#include "renderer/StandardPipeline.hpp"
-#include "renderer/CullPipeline.hpp"
+#include "renderer/pipelines/StandardPipeline.hpp"
+#include "renderer/pipelines/CullPipeline.hpp"
+
+#include "renderer/pipelines/BoundsPipeline.hpp"
+#include <memory>
 
 class Engine; // Forward declaration
 
@@ -21,4 +24,5 @@ private:
     VulkanContext& context;
     StandardPipeline& pipeline;
     CullPipeline& cullPipeline;
+    std::unique_ptr<BoundsPipeline> boundsPipeline;
 };

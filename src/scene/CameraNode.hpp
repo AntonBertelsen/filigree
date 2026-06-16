@@ -16,6 +16,8 @@ public:
 
     float getFov() const { return fov; }
     void setFov(float f) { fov = f; }
+    float getNearPlane() const { return nearPlane; }
+    float getFarPlane() const { return farPlane; }
 
 private:
     void updateCameraVectors();
