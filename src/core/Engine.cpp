@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <chrono>
+#include <meshoptimizer.h>
 
 Engine::Engine() {
     initWindow();
@@ -440,8 +441,90 @@ void Engine::handleWindowRefresh() {
 void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     VulkanContext& ctx = *context;
     
+    const auto& vertices = mesh.getVertices();
+    const auto& indices = mesh.getIndices();
+    
+    if (vertices.empty() || indices.empty()) {
+        return;
+    }
+    
+    size_t max_vertices = 64;
+    size_t max_triangles = 126;
+    float cone_weight = 0.0f;
+    
+    size_t max_meshlets = meshopt_buildMeshletsBound(indices.size(), max_vertices, max_triangles);
+    std::vector<meshopt_Meshlet> meshlets(max_meshlets);
+    std::vector<unsigned int> meshlet_vertices(max_meshlets * max_vertices);
+    std::vector<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);
+    
+    size_t meshlet_count = meshopt_buildMeshlets(
+        meshlets.data(),
+        meshlet_vertices.data(),
+        meshlet_triangles.data(),
+        indices.data(),
+        indices.size(),
+        &vertices[0].pos.x,
+        vertices.size(),
+        sizeof(MeshVertex),
+        max_vertices,
+        max_triangles,
+        cone_weight
+    );
+    
+    meshlets.resize(meshlet_count);
+    
+    std::cout << "  [Meshlets Info] Model: '" << mesh.getModelPath() << "'" << std::endl;
+    std::cout << "    Triangles: " << (indices.size() / 3) << " -> Meshlets: " << meshlet_count << std::endl;
+    
+    size_t total_local_vertices = 0;
+    size_t total_local_triangles = 0;
+    for (size_t i = 0; i < meshlet_count; ++i) {
+        total_local_vertices += meshlets[i].vertex_count;
+        total_local_triangles += meshlets[i].triangle_count;
+    }
+    std::cout << "    Avg Vertices/Meshlet: " << (static_cast<double>(total_local_vertices) / meshlet_count) 
+              << ", Avg Triangles/Meshlet: " << (static_cast<double>(total_local_triangles) / meshlet_count) << std::endl;
+
+    // Flatten and color the meshlets into CPU arrays for standard rendering
+    std::vector<MeshVertex> flatVertices;
+    std::vector<uint32_t> flatIndices;
+    
+    flatVertices.reserve(meshlet_count * max_vertices);
+    flatIndices.reserve(meshlet_count * max_triangles * 3);
+    
+    for (size_t i = 0; i < meshlet_count; ++i) {
+        const auto& meshlet = meshlets[i];
+        
+        // Deterministic high-contrast color based on meshlet index
+        float r = static_cast<float>((i * 17) % 255) / 255.0f;
+        float g = static_cast<float>((i * 59) % 255) / 255.0f;
+        float b = static_cast<float>((i * 97) % 255) / 255.0f;
+        glm::vec3 clusterColor(r, g, b);
+        
+        uint32_t baseVertexIdx = static_cast<uint32_t>(flatVertices.size());
+        
+        // Copy meshlet vertices
+        for (uint32_t v = 0; v < meshlet.vertex_count; ++v) {
+            uint32_t origVertexIdx = meshlet_vertices[meshlet.vertex_offset + v];
+            MeshVertex vertex = vertices[origVertexIdx];
+            vertex.color = clusterColor;
+            flatVertices.push_back(vertex);
+        }
+        
+        // Copy meshlet indices
+        for (uint32_t t = 0; t < meshlet.triangle_count; ++t) {
+            uint32_t localIdx0 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 0];
+            uint32_t localIdx1 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 1];
+            uint32_t localIdx2 = meshlet_triangles[meshlet.triangle_offset + t * 3 + 2];
+            
+            flatIndices.push_back(baseVertexIdx + localIdx0);
+            flatIndices.push_back(baseVertexIdx + localIdx1);
+            flatIndices.push_back(baseVertexIdx + localIdx2);
+        }
+    }
+    
     // 1. Vertex Buffer
-    VkDeviceSize vertexBufferSize = sizeof(MeshVertex) * mesh.getVertices().size();
+    VkDeviceSize vertexBufferSize = sizeof(MeshVertex) * flatVertices.size();
     
     VkBuffer stagingVertexBuffer;
     VmaAllocation stagingVertexAllocation;
@@ -456,7 +539,7 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     
     void* vertexData;
     vmaMapMemory(ctx.getAllocator(), stagingVertexAllocation, &vertexData);
-    memcpy(vertexData, mesh.getVertices().data(), vertexBufferSize);
+    memcpy(vertexData, flatVertices.data(), vertexBufferSize);
     vmaUnmapMemory(ctx.getAllocator(), stagingVertexAllocation);
     
     ctx.createBuffer(
@@ -472,8 +555,8 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     vmaDestroyBuffer(ctx.getAllocator(), stagingVertexBuffer, stagingVertexAllocation);
     
     // 2. Index Buffer
-    VkDeviceSize indexBufferSize = sizeof(uint32_t) * mesh.getIndices().size();
-    gpuMesh.indexCount = static_cast<uint32_t>(mesh.getIndices().size());
+    VkDeviceSize indexBufferSize = sizeof(uint32_t) * flatIndices.size();
+    gpuMesh.indexCount = static_cast<uint32_t>(flatIndices.size());
     
     VkBuffer stagingIndexBuffer;
     VmaAllocation stagingIndexAllocation;
@@ -488,7 +571,7 @@ void Engine::uploadMesh(const MeshNode& mesh, GPUMesh& gpuMesh) {
     
     void* indexData;
     vmaMapMemory(ctx.getAllocator(), stagingIndexAllocation, &indexData);
-    memcpy(indexData, mesh.getIndices().data(), indexBufferSize);
+    memcpy(indexData, flatIndices.data(), indexBufferSize);
     vmaUnmapMemory(ctx.getAllocator(), stagingIndexAllocation);
     
     ctx.createBuffer(

@@ -16,6 +16,8 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
+find_package(meshoptimizer CONFIG REQUIRED)
+
 
 # 3. Collect source files
 # It's cleaner to explicitly list files rather than globbing, so CMake knows when files are added/removed.
@@ -54,6 +56,7 @@ target_link_libraries(filigree PRIVATE
     glm::glm
     GPUOpen::VulkanMemoryAllocator
     tinyobjloader::tinyobjloader
+    meshoptimizer::meshoptimizer
 )
 
 # Configure output directories to keep the build directory tidy
