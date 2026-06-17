@@ -252,6 +252,10 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
         cullPcs.hzbHeight = VulkanContext::HZB_HEIGHT;
         cullPcs.maxMipLevel = VulkanContext::HZB_MIP_LEVELS - 1;
         cullPcs.hzbCullingEnabled = engine.hzbCullingEnabled ? 1 : 0;
+        cullPcs.lodThreshold = engine.lodThreshold;
+        cullPcs.viewportHeight = static_cast<float>(context.getSwapChainExtent().height);
+        cullPcs.lodEnabled = engine.lodEnabled ? 1 : 0;
+        cullPcs.padding2 = 0;
 
         // 2a. Reset draw count atomic buffer
         vkCmdFillBuffer(cb, mesh.drawCountBuffer[currentFrame], 0, sizeof(uint32_t), 0);

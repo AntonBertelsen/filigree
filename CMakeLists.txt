@@ -39,6 +39,8 @@ set(SOURCES
     src/renderer/pipelines/CullPipeline.cpp
     src/geometry/MeshletBuilder.hpp
     src/geometry/MeshletBuilder.cpp
+    src/geometry/ClusterDAGBuilder.hpp
+    src/geometry/ClusterDAGBuilder.cpp
     src/geometry/GPUMesh.hpp
     src/geometry/GPUMeshUploader.hpp
     src/geometry/GPUMeshUploader.cpp

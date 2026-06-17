@@ -5,8 +5,11 @@ layout(push_constant) uniform PushConstants {
 } pcs;
 
 struct MeshletBounds {
-    vec4 sphereCenterRadius;
-    vec4 coneAxisCutoff;
+    vec4 sphereCenterRadius;          // xyz = center, w = radius (individual bounds)
+    vec4 coneAxisCutoff;              // xyz = axis, w = cutoff
+    vec4 lodSphereCenterRadius;       // xyz = center, w = radius (LOD group bounds)
+    vec4 parentLodSphereCenterRadius; // xyz = center, w = radius (LOD parent group bounds)
+    vec4 lodParams;                   // x = selfError, y = parentError, zw = padding
 };
 
 layout(std430, set = 0, binding = 3) readonly buffer Bounds {
@@ -27,6 +30,13 @@ void main() {
     vec3 center = centerRadius.xyz;
     float radius = centerRadius.w;
     uint visible = visibilities[instanceID];
+    
+    // Discard LOD-culled bounding spheres to keep the debug view clean
+    if (visible == 5 || visible == 0) {
+        gl_Position = vec4(0.0);
+        outColor = vec3(0.0);
+        return;
+    }
     
     // 3 circles: XY, YZ, ZX
     // Each circle has 16 segments (32 vertices)
@@ -56,6 +66,7 @@ void main() {
     // 2 = Frustum Culled (Yellow)
     // 3 = Backface Culled (Blue)
     // 4 = HZB Occlusion Culled (Red)
+    // 5 = LOD Culled (Purple)
     if (visible == 1) {
         outColor = vec3(0.0, 1.0, 0.0);       // Green
     } else if (visible == 2) {
@@ -64,6 +75,8 @@ void main() {
         outColor = vec3(0.0, 0.5, 1.0);       // Blue
     } else if (visible == 4) {
         outColor = vec3(1.0, 0.0, 0.0);       // Red
+    } else if (visible == 5) {
+        outColor = vec3(0.6, 0.1, 0.8);       // Purple (LOD Culled)
     } else {
         outColor = vec3(0.5, 0.5, 0.5);       // Grey fallback
     }

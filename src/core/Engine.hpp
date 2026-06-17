@@ -81,6 +81,8 @@ private:
     bool debugVisualiseHzb = false;
     uint32_t debugHzbMipLevel = 0;
     bool drawBoundingSpheres = false;
+    bool lodEnabled = true;
+    float lodThreshold = 2.0f; // in pixels
 
     // Visual verification of culling (Freeze Frustum)
     bool freezeCulling = false;

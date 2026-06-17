@@ -14,8 +14,11 @@ struct VkDrawIndexedIndirectCommand {
 
 // Meshlet bounds structure
 struct MeshletBounds {
-    vec4 sphereCenterRadius; // xyz = center, w = radius
-    vec4 coneAxisCutoff;     // xyz = axis, w = cutoff
+    vec4 sphereCenterRadius;          // xyz = center, w = radius (individual bounds)
+    vec4 coneAxisCutoff;              // xyz = axis, w = cutoff
+    vec4 lodSphereCenterRadius;       // xyz = center, w = radius (LOD group bounds)
+    vec4 parentLodSphereCenterRadius; // xyz = center, w = radius (LOD parent group bounds)
+    vec4 lodParams;                   // x = selfError, y = parentError, zw = padding
 };
 
 // Descriptor set bindings
@@ -54,6 +57,10 @@ layout(push_constant) uniform CullPushConstants {
     uint hzbHeight;
     uint maxMipLevel;
     uint hzbCullingEnabled;
+    float lodThreshold;
+    float viewportHeight;
+    uint lodEnabled;
+    uint padding2;
 } pcs;
 
 void main() {
@@ -69,16 +76,50 @@ void main() {
     vec3 center = centerRadius.xyz;
     float radius = centerRadius.w;
     
-    // 1. Frustum Culling Test
+    // 0. LOD Selection Test
     bool visible = true;
     uint visibilityStatus = 1; // 1 = Visible
     
-    for (int i = 0; i < 6; ++i) {
-        float dist = dot(pcs.frustumPlanes[i].xyz, center) + pcs.frustumPlanes[i].w;
-        if (dist < -radius) {
+    if (pcs.lodEnabled != 0) {
+        float selfError = bounds[gID].lodParams.x;
+        float parentError = bounds[gID].lodParams.y;
+        
+        vec4 lodSphere = bounds[gID].lodSphereCenterRadius;
+        vec4 parentLodSphere = bounds[gID].parentLodSphereCenterRadius;
+        
+        // Project selfError using group union lodSphere
+        float d_model_self = length(lodSphere.xyz - pcs.cameraPos);
+        float d_world_self = max(0.001, (d_model_self - lodSphere.w) * pcs.modelScale);
+        float sseSelf = (selfError * pcs.modelScale * abs(pcs.hzbParams.y) * pcs.viewportHeight) / (2.0 * d_world_self);
+        
+        // Project parentError using parent group union parentLodSphere
+        float d_model_parent = length(parentLodSphere.xyz - pcs.cameraPos);
+        float d_world_parent = max(0.001, (d_model_parent - parentLodSphere.w) * pcs.modelScale);
+        float sseParent = (parentError * pcs.modelScale * abs(pcs.hzbParams.y) * pcs.viewportHeight) / (2.0 * d_world_parent);
+        
+        bool lodSelected = (sseSelf <= pcs.lodThreshold) && (sseParent > pcs.lodThreshold);
+        if (!lodSelected) {
             visible = false;
-            visibilityStatus = 2; // 2 = Frustum Culled
-            break;
+            visibilityStatus = 5; // 5 = LOD Culled
+        }
+    } else {
+        // LOD disabled: only render leaf clusters (selfError == 0.0)
+        float selfError = bounds[gID].lodParams.x;
+        if (selfError > 0.0) {
+            visible = false;
+            visibilityStatus = 5; // 5 = LOD Culled
+        }
+    }
+    
+    // 1. Frustum Culling Test (only if LOD selected)
+    if (visible) {
+        for (int i = 0; i < 6; ++i) {
+            float dist = dot(pcs.frustumPlanes[i].xyz, center) + pcs.frustumPlanes[i].w;
+            if (dist < -radius) {
+                visible = false;
+                visibilityStatus = 2; // 2 = Frustum Culled
+                break;
+            }
         }
     }
     

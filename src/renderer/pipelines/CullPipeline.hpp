@@ -17,11 +17,18 @@ struct CullPushConstants {
     uint32_t hzbHeight;
     uint32_t maxMipLevel;
     uint32_t hzbCullingEnabled;
+    float lodThreshold;
+    float viewportHeight;
+    uint32_t lodEnabled;
+    uint32_t padding2;
 };
 
 struct MeshletBounds {
-    glm::vec4 sphereCenterRadius; // xyz = center, w = radius
-    glm::vec4 coneAxisCutoff;     // xyz = axis, w = cutoff
+    glm::vec4 sphereCenterRadius;          // xyz = center, w = radius (individual bounds)
+    glm::vec4 coneAxisCutoff;              // xyz = axis, w = cutoff
+    glm::vec4 lodSphereCenterRadius;       // xyz = center, w = radius (LOD group bounds)
+    glm::vec4 parentLodSphereCenterRadius; // xyz = center, w = radius (LOD parent group bounds)
+    glm::vec4 lodParams;                   // x = selfError, y = parentError, zw = padding
 };
 
 class CullPipeline {

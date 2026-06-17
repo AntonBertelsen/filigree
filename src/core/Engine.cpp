@@ -1,6 +1,6 @@
 #include "Engine.hpp"
 #include "renderer/VulkanRenderer.hpp"
-#include "geometry/MeshletBuilder.hpp"
+#include "geometry/ClusterDAGBuilder.hpp"
 #include "geometry/GPUMeshUploader.hpp"
 #include "core/InputController.hpp"
 #include "renderer/pipelines/HzbPipeline.hpp"
@@ -73,8 +73,8 @@ Engine::Engine() {
         asset.scale = config.scale;
         asset.sceneNode = weakNode;
         
-        std::cout << "Processing & uploading " << config.name << " meshlets to GPU..." << std::endl;
-        MeshletData meshletData = MeshletBuilder::buildMeshlets(weakNode->getVertices(), weakNode->getIndices());
+        std::cout << "Building Cluster DAG & uploading " << config.name << " to GPU..." << std::endl;
+        MeshletData meshletData = ClusterDAGBuilder::buildClusterDAG(weakNode->getVertices(), weakNode->getIndices());
         
         GPUMeshUploader::uploadMesh(
             *context, 
@@ -150,6 +150,21 @@ void Engine::mainLoop() {
             std::cout << "[Mode Switch] Render mode changed to: " << (renderModeNanite ? "NANITE" : "TRADITIONAL") << std::endl;
         }
 
+        if (inputController->isLPressedThisFrame()) {
+            lodEnabled = !lodEnabled;
+            std::cout << "[LOD Selection] LOD system: " << (lodEnabled ? "ENABLED" : "DISABLED") << std::endl;
+        }
+
+        if (inputController->is1PressedThisFrame()) {
+            lodThreshold = std::max(0.1f, lodThreshold - 0.5f);
+            std::cout << "[LOD Selection] LOD screen threshold decreased to: " << lodThreshold << " pixels" << std::endl;
+        }
+
+        if (inputController->is2PressedThisFrame()) {
+            lodThreshold += 0.5f;
+            std::cout << "[LOD Selection] LOD screen threshold increased to: " << lodThreshold << " pixels" << std::endl;
+        }
+
         if (inputController->isMPressedThisFrame()) {
             activeModelIndex = (activeModelIndex + 1) % models.size();
             std::cout << "[Asset Switch] Active model cycled to: " << models[activeModelIndex].name << std::endl;
@@ -205,9 +220,10 @@ void Engine::mainLoop() {
                 
                 std::cout << "[Telemetry] Render Mode: " << (renderModeNanite ? "NANITE" : "TRADITIONAL")
                           << " | Model: " << activeAsset.name
-                          << " | Meshlets Drawn: " << (renderModeNanite ? std::to_string(drawCount) : "N/A (All)")
+                          << " | Clusters Drawn: " << (renderModeNanite ? std::to_string(drawCount) : "N/A (All)")
                           << " / " << activeAsset.gpuMesh.clusterCount
-                          << " | HZB Occlusion Culling: " << (hzbCullingEnabled ? "ON" : "OFF")
+                          << " | LOD: " << (lodEnabled ? "ON (" + std::to_string(lodThreshold) + "px)" : "OFF")
+                          << " | HZB Culling: " << (hzbCullingEnabled ? "ON" : "OFF")
                           << std::endl;
             }
         }

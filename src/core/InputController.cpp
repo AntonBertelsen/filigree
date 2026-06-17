@@ -88,4 +88,34 @@ void InputController::update(float deltaTime) {
         }
         bWasPressed = currentBState;
     }
+
+    // 10. Poll L Key (Toggle LOD)
+    lPressedThisFrame = false;
+    if (window) {
+        bool currentLState = (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS);
+        if (currentLState && !lWasPressed) {
+            lPressedThisFrame = true;
+        }
+        lWasPressed = currentLState;
+    }
+
+    // 11. Poll 1 Key (Decrease LOD Threshold)
+    key1PressedThisFrame = false;
+    if (window) {
+        bool current1State = (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS);
+        if (current1State && !key1WasPressed) {
+            key1PressedThisFrame = true;
+        }
+        key1WasPressed = current1State;
+    }
+
+    // 12. Poll 2 Key (Increase LOD Threshold)
+    key2PressedThisFrame = false;
+    if (window) {
+        bool current2State = (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS);
+        if (current2State && !key2WasPressed) {
+            key2PressedThisFrame = true;
+        }
+        key2WasPressed = current2State;
+    }
 }
