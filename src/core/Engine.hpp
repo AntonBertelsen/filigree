@@ -83,6 +83,7 @@ private:
     bool drawBoundingSpheres = false;
     bool lodEnabled = true;
     float lodThreshold = 2.0f; // in pixels
+    uint32_t visBufferDebugMode = 0; // 0 = Shaded, 1 = Neutral, 2 = Triangle ID, 3 = Barycentrics, 4 = Meshlet ID
 
     // Visual verification of culling (Freeze Frustum)
     bool freezeCulling = false;

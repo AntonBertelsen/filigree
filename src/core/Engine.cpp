@@ -204,6 +204,12 @@ void Engine::mainLoop() {
             std::cout << "[Debug Bounds] Bounding spheres visualization: " << (drawBoundingSpheres ? "ENABLED" : "DISABLED") << std::endl;
         }
 
+        if (inputController->is3PressedThisFrame()) {
+            visBufferDebugMode = (visBufferDebugMode + 1) % 5;
+            std::vector<std::string> modes = { "SHADED", "NEUTRAL", "TRIANGLE_ID", "BARYCENTRICS", "MESHLET_ID" };
+            std::cout << "[VisBuffer Debug] Mode changed to: " << modes[visBufferDebugMode] << std::endl;
+        }
+
         // Print telemetry once every 60 frames
         telemetryFrameCount++;
         if (telemetryFrameCount >= 60) {
@@ -338,6 +344,10 @@ void Engine::recreateSwapChain() {
     }
     if (debugPipeline) {
         debugPipeline->updateDescriptorSets();
+    }
+
+    if (renderer) {
+        renderer->recreateVisBuffer();
     }
 
     for (auto& asset : models) {

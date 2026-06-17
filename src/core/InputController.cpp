@@ -118,4 +118,14 @@ void InputController::update(float deltaTime) {
         }
         key2WasPressed = current2State;
     }
+
+    // 13. Poll 3 Key (Cycle VisBuffer Debug Mode)
+    key3PressedThisFrame = false;
+    if (window) {
+        bool current3State = (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS);
+        if (current3State && !key3WasPressed) {
+            key3PressedThisFrame = true;
+        }
+        key3WasPressed = current3State;
+    }
 }

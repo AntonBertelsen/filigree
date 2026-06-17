@@ -35,6 +35,10 @@ set(SOURCES
     src/scene/MeshNode.cpp
     src/renderer/pipelines/StandardPipeline.hpp
     src/renderer/pipelines/StandardPipeline.cpp
+    src/renderer/pipelines/VisBufferPipeline.hpp
+    src/renderer/pipelines/VisBufferPipeline.cpp
+    src/renderer/pipelines/ResolvePipeline.hpp
+    src/renderer/pipelines/ResolvePipeline.cpp
     src/renderer/pipelines/CullPipeline.hpp
     src/renderer/pipelines/CullPipeline.cpp
     src/geometry/MeshletBuilder.hpp
@@ -99,6 +103,10 @@ set(SHADER_SPV_OUTPUTS
     "${CMAKE_BINARY_DIR}/bin/shaders/debug_frag.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/bounds_vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_vert.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/resolve_vert.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
 )
 
 # Create output shader directory in the build folder
@@ -166,6 +174,38 @@ add_custom_command(
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bounds.frag"
     COMMENT "Compiling bounds fragment shader to SPIR-V..."
+)
+
+# Custom command to compile visbuffer vertex shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_vert.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.vert" -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.vert"
+    COMMENT "Compiling VisBuffer vertex shader to SPIR-V..."
+)
+
+# Custom command to compile visbuffer fragment shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag"
+    COMMENT "Compiling VisBuffer fragment shader to SPIR-V..."
+)
+
+# Custom command to compile resolve vertex shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/resolve_vert.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.vert" -o "${CMAKE_BINARY_DIR}/bin/shaders/resolve_vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.vert"
+    COMMENT "Compiling Resolve vertex shader to SPIR-V..."
+)
+
+# Custom command to compile resolve fragment shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag"
+    COMMENT "Compiling Resolve fragment shader to SPIR-V..."
 )
 
 # Create a target for shaders that our main executable depends on

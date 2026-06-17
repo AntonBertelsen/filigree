@@ -8,6 +8,107 @@
 VulkanRenderer::VulkanRenderer(VulkanContext& context, StandardPipeline& pipeline, CullPipeline& cullPipeline)
     : context(context), pipeline(pipeline), cullPipeline(cullPipeline) {
     boundsPipeline = std::make_unique<BoundsPipeline>(context, cullPipeline.getDescriptorSetLayout());
+    visBufferPipeline = std::make_unique<VisBufferPipeline>(context);
+    resolvePipeline = std::make_unique<ResolvePipeline>(context);
+    createVisBufferResources();
+}
+
+VulkanRenderer::~VulkanRenderer() {
+    destroyVisBufferResources();
+}
+
+void VulkanRenderer::recreateVisBuffer() {
+    destroyVisBufferResources();
+    createVisBufferResources();
+}
+
+void VulkanRenderer::createVisBufferResources() {
+    VkDevice device = context.getDevice();
+    VmaAllocator allocator = context.getAllocator();
+    VkExtent2D extent = context.getSwapChainExtent();
+
+    // 1. Create Image
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = extent.width;
+    imageInfo.extent.height = extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R32G32_UINT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    allocInfo.priority = 1.0f;
+
+    if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &visBufferImage, &visBufferAllocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VisBuffer image!");
+    }
+
+    // 2. Create ImageView
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = visBufferImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R32G32_UINT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &visBufferImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VisBuffer imageView!");
+    }
+
+    // 3. Create Sampler (Nearest filtering, clamp to edge)
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &visBufferSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VisBuffer sampler!");
+    }
+}
+
+void VulkanRenderer::destroyVisBufferResources() {
+    VkDevice device = context.getDevice();
+    VmaAllocator allocator = context.getAllocator();
+
+    if (visBufferSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, visBufferSampler, nullptr);
+        visBufferSampler = VK_NULL_HANDLE;
+    }
+    if (visBufferImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, visBufferImageView, nullptr);
+        visBufferImageView = VK_NULL_HANDLE;
+    }
+    if (visBufferImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(allocator, visBufferImage, visBufferAllocation);
+        visBufferImage = VK_NULL_HANDLE;
+        visBufferAllocation = VK_NULL_HANDLE;
+    }
 }
 
 void VulkanRenderer::drawFrame(Engine& engine) {
@@ -327,40 +428,65 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     }
 
     // 3. Begin dynamic rendering
-    VkRenderingAttachmentInfo colorAttachment{};
-    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = context.getSwapChainImageViews()[imageIndex];
-    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Clear: Black
+    if (activeAsset && engine.renderModeNanite) {
+        // --- Pass 1: Render Nanite Meshlets to VisBuffer ---
 
-    VkRenderingAttachmentInfo depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = context.getDepthImageView();
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.clearValue.depthStencil = { 1.0f, 0 }; // Clear to 1.0 (far plane)
+        // Image Barrier: Transition VisBuffer to COLOR_ATTACHMENT_OPTIMAL
+        VkImageMemoryBarrier2 visBarrier{};
+        visBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        visBarrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        visBarrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        visBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        visBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        visBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // Discard old contents
+        visBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        visBarrier.image = visBufferImage;
+        visBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        visBarrier.subresourceRange.baseMipLevel = 0;
+        visBarrier.subresourceRange.levelCount = 1;
+        visBarrier.subresourceRange.baseArrayLayer = 0;
+        visBarrier.subresourceRange.layerCount = 1;
 
-    bool debugView = engine.debugVisualiseHzb;
+        VkDependencyInfo visDependency{};
+        visDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        visDependency.imageMemoryBarrierCount = 1;
+        visDependency.pImageMemoryBarriers = &visBarrier;
+        vkCmdPipelineBarrier2(cb, &visDependency);
 
-    VkRenderingInfo renderingInfo{};
-    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    renderingInfo.renderArea.offset = {0, 0};
-    renderingInfo.renderArea.extent = context.getSwapChainExtent();
-    renderingInfo.layerCount = 1;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachments = &colorAttachment;
-    renderingInfo.pDepthAttachment = &depthAttachment; // Always write depth to generate correct HZB
+        VkRenderingAttachmentInfo visColorAttachment{};
+        visColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        visColorAttachment.imageView = visBufferImageView;
+        visColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        visColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        visColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        visColorAttachment.clearValue.color.uint32[0] = 0xFFFFFFFFu;
+        visColorAttachment.clearValue.color.uint32[1] = 0xFFFFFFFFu;
+        visColorAttachment.clearValue.color.uint32[2] = 0xFFFFFFFFu;
+        visColorAttachment.clearValue.color.uint32[3] = 0xFFFFFFFFu;
 
-    vkCmdBeginRendering(cb, &renderingInfo);
+        VkRenderingAttachmentInfo depthAttachment{};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = context.getDepthImageView();
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
-    if (activeAsset) {
-        // 4b. Bind standard Graphics Pipeline
-        pipeline.bind(cb);
+        VkRenderingInfo renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderingInfo.renderArea.offset = {0, 0};
+        renderingInfo.renderArea.extent = context.getSwapChainExtent();
+        renderingInfo.layerCount = 1;
+        renderingInfo.colorAttachmentCount = 1;
+        renderingInfo.pColorAttachments = &visColorAttachment;
+        renderingInfo.pDepthAttachment = &depthAttachment;
 
-        // Set Dynamic Viewport & Scissor
+        vkCmdBeginRendering(cb, &renderingInfo);
+
+        // Bind VisBuffer Pipeline
+        visBufferPipeline->bind(cb);
+
+        // Set Viewport & Scissor
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
@@ -375,35 +501,145 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
         scissor.extent = context.getSwapChainExtent();
         vkCmdSetScissor(cb, 0, 1, &scissor);
 
-        // Push Standard Push Constants (viewProj & render mode)
-        StandardPipeline::StandardPushConstants standardPcs{};
-        standardPcs.viewProj = viewProj * modelMatrix;
-        standardPcs.isNaniteMode = engine.renderModeNanite ? 1 : 0;
-        pipeline.pushConstants(cb, standardPcs);
+        // Push Constants
+        VisBufferPipeline::VisBufferPushConstants visPcs{};
+        visPcs.viewProj = viewProj * modelMatrix;
+        visBufferPipeline->pushConstants(cb, visPcs);
+
+        // Bind Meshlet buffers
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
+        vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+        // Draw via Multi-Draw Indirect Count
+        vkCmdDrawIndexedIndirectCount(
+            cb,
+            activeAsset->gpuMesh.culledIndirectBuffer[currentFrame],
+            0,
+            activeAsset->gpuMesh.drawCountBuffer[currentFrame],
+            0,
+            activeAsset->gpuMesh.clusterCount,
+            sizeof(VkDrawIndexedIndirectCommand)
+        );
+
+        vkCmdEndRendering(cb);
+
+        // Image Barrier: Transition VisBuffer to SHADER_READ_ONLY_OPTIMAL for resolve pass
+        VkImageMemoryBarrier2 readBarrier{};
+        readBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        readBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        readBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        readBarrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        readBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        readBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        readBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        readBarrier.image = visBufferImage;
+        readBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        readBarrier.subresourceRange.baseMipLevel = 0;
+        readBarrier.subresourceRange.levelCount = 1;
+        readBarrier.subresourceRange.baseArrayLayer = 0;
+        readBarrier.subresourceRange.layerCount = 1;
+
+        VkDependencyInfo readDependency{};
+        readDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        readDependency.imageMemoryBarrierCount = 1;
+        readDependency.pImageMemoryBarriers = &readBarrier;
+        vkCmdPipelineBarrier2(cb, &readDependency);
+    }
+
+    // --- Pass 2: Main Swapchain Pass (Resolve VisBuffer & Shading) ---
+    VkRenderingAttachmentInfo swapColorAttachment{};
+    swapColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    swapColorAttachment.imageView = context.getSwapChainImageViews()[imageIndex];
+    swapColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    swapColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    swapColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    swapColorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Clear swapchain to black
+
+    VkRenderingAttachmentInfo swapDepthAttachment{};
+    swapDepthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    swapDepthAttachment.imageView = context.getDepthImageView();
+    swapDepthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // In Nanite mode, we load the depth built in Pass 1 to allow debug bounding spheres to depth test correctly.
+    // In traditional mode, we clear depth since we will rasterize directly to the swapchain.
+    swapDepthAttachment.loadOp = (activeAsset && engine.renderModeNanite) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+    swapDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    swapDepthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+
+    VkRenderingInfo swapRenderingInfo{};
+    swapRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    swapRenderingInfo.renderArea.offset = {0, 0};
+    swapRenderingInfo.renderArea.extent = context.getSwapChainExtent();
+    swapRenderingInfo.layerCount = 1;
+    swapRenderingInfo.colorAttachmentCount = 1;
+    swapRenderingInfo.pColorAttachments = &swapColorAttachment;
+    swapRenderingInfo.pDepthAttachment = &swapDepthAttachment;
+
+    vkCmdBeginRendering(cb, &swapRenderingInfo);
+
+    if (activeAsset) {
+        // Set Viewport & Scissor
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(context.getSwapChainExtent().width);
+        viewport.height = static_cast<float>(context.getSwapChainExtent().height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cb, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = context.getSwapChainExtent();
+        vkCmdSetScissor(cb, 0, 1, &scissor);
 
         if (engine.renderModeNanite) {
-            // Bind Meshlet (flat) vertex and index buffers
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(cb, 0, 1, &activeVertexBuffer, offsets);
-            vkCmdBindIndexBuffer(cb, activeIndexBuffer, 0, VK_INDEX_TYPE_UINT16); // Local uint16_t indices
-
-            // Draw via Multi-Draw Indirect Count
-            vkCmdDrawIndexedIndirectCount(
-                cb,
-                activeAsset->gpuMesh.culledIndirectBuffer[currentFrame],
-                0,
-                activeAsset->gpuMesh.drawCountBuffer[currentFrame],
-                0,
-                activeAsset->gpuMesh.clusterCount,
-                sizeof(VkDrawIndexedIndirectCommand)
+            // Draw Fullscreen Resolve Quad
+            resolvePipeline->updateDescriptorSets(
+                currentFrame,
+                visBufferImageView,
+                visBufferSampler,
+                activeAsset->gpuMesh.vertexBuffer,
+                activeAsset->gpuMesh.indexBuffer,
+                activeAsset->gpuMesh.indirectBuffer
             );
+
+            resolvePipeline->bind(cb);
+
+            VkDescriptorSet resolveSets[] = { resolvePipeline->getDescriptorSet(currentFrame) };
+            vkCmdBindDescriptorSets(
+                cb,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                resolvePipeline->getPipelineLayout(),
+                0,
+                1,
+                resolveSets,
+                0,
+                nullptr
+            );
+
+            ResolvePipeline::ResolvePushConstants resolvePcs{};
+            resolvePcs.viewProj = viewProj * modelMatrix;
+            resolvePcs.viewportSize = glm::vec2(viewport.width, viewport.height);
+            resolvePcs.isNaniteMode = 1;
+            resolvePcs.debugMode = engine.visBufferDebugMode;
+            resolvePipeline->pushConstants(cb, resolvePcs);
+
+            // Draw fullscreen quad (3 vertices, 1 instance)
+            vkCmdDraw(cb, 3, 1, 0, 0);
         } else {
-            // Bind Traditional (unclustered) vertex and index buffers
+            // --- Fallback: Render Traditional Geometry Directly to Swapchain ---
+            pipeline.bind(cb);
+
+            StandardPipeline::StandardPushConstants standardPcs{};
+            standardPcs.viewProj = viewProj * modelMatrix;
+            standardPcs.isNaniteMode = 0;
+            pipeline.pushConstants(cb, standardPcs);
+
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cb, 0, 1, &activeAsset->gpuMesh.traditionalVertexBuffer, offsets);
-            vkCmdBindIndexBuffer(cb, activeAsset->gpuMesh.traditionalIndexBuffer, 0, VK_INDEX_TYPE_UINT32); // Original 32-bit indices
+            vkCmdBindIndexBuffer(cb, activeAsset->gpuMesh.traditionalIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Draw unclustered model in a single standard draw call
             vkCmdDrawIndexed(cb, activeAsset->gpuMesh.traditionalIndexCount, 1, 0, 0, 0);
         }
 
@@ -429,7 +665,6 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
         }
     }
 
-    // 5. End Dynamic Rendering
     vkCmdEndRendering(cb);
 
     // 6. Generate Hierarchical Z-Buffer (HZB) for the next frame's culling
