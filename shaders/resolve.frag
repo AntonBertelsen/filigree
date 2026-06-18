@@ -4,7 +4,7 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 // Bindings
-layout(set = 0, binding = 0) uniform usampler2D visBuffer;
+layout(set = 0, binding = 10) uniform usampler2D visBuffer;
 
 struct MeshVertex {
     float px, py, pz;
@@ -12,12 +12,12 @@ struct MeshVertex {
     float u, v;
 };
 
-layout(std430, set = 0, binding = 1) readonly buffer Vertices {
+layout(std430, set = 0, binding = 8) readonly buffer Vertices {
     MeshVertex vertices[];
 };
 
-layout(std430, set = 0, binding = 2) readonly buffer Indices {
-    uint packedIndices[];
+layout(std430, set = 0, binding = 9) readonly buffer NaniteIndices {
+    uint packedNaniteIndices[];
 };
 
 struct DrawCommand {
@@ -28,8 +28,24 @@ struct DrawCommand {
     uint firstInstance;
 };
 
-layout(std430, set = 0, binding = 3) readonly buffer IndirectCommands {
+layout(std430, set = 0, binding = 0) readonly buffer IndirectCommands {
     DrawCommand commands[];
+};
+
+struct InstanceData {
+    mat4 modelMatrix;
+    uint baseVertexOffset;
+    uint baseIndexOffset;
+    uint firstMeshletCommandOffset;
+    uint isNanite;
+};
+
+layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
+layout(std430, set = 0, binding = 11) readonly buffer TraditionalIndices {
+    uint traditionalIndices[];
 };
 
 layout(push_constant) uniform PushConstants {
@@ -39,10 +55,13 @@ layout(push_constant) uniform PushConstants {
     uint debugMode;
 } pcs;
 
-// Unpacks 16-bit indices from a uint array
+// Unpacks 16-bit indices from a uint array (or 32-bit indices if in traditional mode)
 uint getIndex(uint indexOffset) {
+    if (pcs.isNaniteMode == 0) {
+        return traditionalIndices[indexOffset];
+    }
     uint wordIdx = indexOffset / 2;
-    uint pair = packedIndices[wordIdx];
+    uint pair = packedNaniteIndices[wordIdx];
     if (indexOffset % 2 == 0) {
         return pair & 0xFFFFu;
     } else {
@@ -61,13 +80,34 @@ void main() {
         return;
     }
     
-    uint meshletID = visData.x;
+    uint instIdx;
+    uint meshletID;
+    
+    uint packedVal = visData.x;
+    if (pcs.isNaniteMode == 1) {
+        meshletID = packedVal & 0xFFFFu;
+        instIdx = packedVal >> 16;
+    } else {
+        meshletID = 0;
+        instIdx = packedVal >> 16;
+    }
+    
     uint triangleID = visData.y;
     
+    InstanceData inst = instances[instIdx];
+    mat4 modelMatrix = inst.modelMatrix;
+    
     // 2. Fetch Draw Command parameters for this meshlet
-    DrawCommand cmd = commands[meshletID];
-    uint baseIndex = cmd.firstIndex;
-    int vertexOffset = cmd.vertexOffset;
+    uint baseIndex = 0;
+    int vertexOffset = 0;
+    if (pcs.isNaniteMode == 1) {
+        DrawCommand cmd = commands[inst.firstMeshletCommandOffset + meshletID];
+        baseIndex = cmd.firstIndex;
+        vertexOffset = cmd.vertexOffset;
+    } else {
+        baseIndex = inst.baseIndexOffset;
+        vertexOffset = int(inst.baseVertexOffset);
+    }
     
     // 3. Load indices for the 3 triangle vertices
     uint i0 = getIndex(baseIndex + triangleID * 3 + 0) + vertexOffset;
@@ -88,9 +128,9 @@ void main() {
     vec3 v2_normal = vec3(v2.nx, v2.ny, v2.nz);
     
     // 5. Project vertices to clip space & screen space
-    vec4 p0 = pcs.viewProj * vec4(v0_pos, 1.0);
-    vec4 p1 = pcs.viewProj * vec4(v1_pos, 1.0);
-    vec4 p2 = pcs.viewProj * vec4(v2_pos, 1.0);
+    vec4 p0 = pcs.viewProj * (modelMatrix * vec4(v0_pos, 1.0));
+    vec4 p1 = pcs.viewProj * (modelMatrix * vec4(v1_pos, 1.0));
+    vec4 p2 = pcs.viewProj * (modelMatrix * vec4(v2_pos, 1.0));
     
     vec2 v0_screen = (p0.xy / p0.w * 0.5 + 0.5) * pcs.viewportSize;
     vec2 v1_screen = (p1.xy / p1.w * 0.5 + 0.5) * pcs.viewportSize;
@@ -126,7 +166,7 @@ void main() {
     
     // 8. Interpolate Normal
     vec3 interpolatedNormal = b0 * v0_normal + b1 * v1_normal + b2 * v2_normal;
-    vec3 N = normalize(interpolatedNormal);
+    vec3 N = normalize(mat3(modelMatrix) * interpolatedNormal);
     
     // 9. Standard lighting calculation
     vec3 L1 = normalize(vec3(0.5, 1.0, 0.4));

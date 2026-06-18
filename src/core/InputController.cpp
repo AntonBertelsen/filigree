@@ -128,4 +128,14 @@ void InputController::update(float deltaTime) {
         }
         key3WasPressed = current3State;
     }
+
+    // 14. Poll 4 Key (Toggle Shading Path)
+    key4PressedThisFrame = false;
+    if (window) {
+        bool current4State = (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS);
+        if (current4State && !key4WasPressed) {
+            key4PressedThisFrame = true;
+        }
+        key4WasPressed = current4State;
+    }
 }

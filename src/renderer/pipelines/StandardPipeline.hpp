@@ -7,7 +7,7 @@
 
 class StandardPipeline {
 public:
-    StandardPipeline(VulkanContext& context);
+    StandardPipeline(VulkanContext& context, VkDescriptorSetLayout cullDescriptorSetLayout);
     ~StandardPipeline();
 
     // Prevent copying
@@ -30,6 +30,7 @@ private:
     void cleanup();
 
     VulkanContext& context;
+    VkDescriptorSetLayout cullDescriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
 };

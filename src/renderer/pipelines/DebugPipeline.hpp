@@ -25,7 +25,7 @@ public:
     void bind(VkCommandBuffer cb);
     void pushConstants(VkCommandBuffer cb, const DebugPushConstants& pcs);
 
-    void updateDescriptorSets();
+    void updateDescriptorSets(VkImageView hzbImageView0, VkImageView hzbImageView1);
 
 private:
     void createPipeline();

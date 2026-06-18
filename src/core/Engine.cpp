@@ -9,15 +9,16 @@
 #include <iostream>
 #include <stdexcept>
 #include <array>
+#include <algorithm>
 
 Engine::Engine() {
     initWindow();
     context = std::make_unique<VulkanContext>(window);
-    pipeline = std::make_unique<StandardPipeline>(*context);
     cullPipeline = std::make_unique<CullPipeline>(*context);
+    pipeline = std::make_unique<StandardPipeline>(*context, cullPipeline->getDescriptorSetLayout());
     hzbPipeline = std::make_unique<HzbPipeline>(*context);
     debugPipeline = std::make_unique<DebugPipeline>(*context);
-    renderer = std::make_unique<VulkanRenderer>(*context, *pipeline, *cullPipeline);
+    renderer = std::make_unique<VulkanRenderer>(*context, *pipeline, *cullPipeline, *hzbPipeline, *debugPipeline);
     
     rootNode = std::make_unique<Node>();
     
@@ -30,15 +31,15 @@ Engine::Engine() {
     // Allocate compute descriptor pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 24; // 4 bindings * 2 frames in flight * 3 models
+    poolSizes[0].descriptorCount = 96;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 6; // 1 binding * 2 frames in flight * 3 models
+    poolSizes[1].descriptorCount = 12;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 8;
+    poolInfo.maxSets = 16;
 
     if (vkCreateDescriptorPool(context->getDevice(), &poolInfo, nullptr, &computeDescriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create compute descriptor pool!");
@@ -57,6 +58,7 @@ Engine::Engine() {
         {"Torus Knot", "assets/models/torus_knot.obj", {0.0f, 0.0f, 0.0f}, 0.25f}
     };
     
+    std::vector<MeshletData> meshletDatas;
     for (const auto& config : configs) {
         std::cout << "Loading " << config.name << " model..." << std::endl;
         auto meshNode = std::make_unique<MeshNode>(config.path);
@@ -73,19 +75,33 @@ Engine::Engine() {
         asset.scale = config.scale;
         asset.sceneNode = weakNode;
         
-        std::cout << "Building Cluster DAG & uploading " << config.name << " to GPU..." << std::endl;
+        std::cout << "Building Cluster DAG for " << config.name << "..." << std::endl;
         MeshletData meshletData = ClusterDAGBuilder::buildClusterDAG(weakNode->getVertices(), weakNode->getIndices());
-        
-        GPUMeshUploader::uploadMesh(
-            *context, 
-            computeDescriptorPool, 
-            cullPipeline->getDescriptorSetLayout(), 
-            meshletData, 
-            asset.gpuMesh
-        );
+        meshletDatas.push_back(meshletData);
         
         models.push_back(asset);
     }
+
+    std::cout << "Uploading unified scene geometry to GPU..." << std::endl;
+    std::vector<GPUMesh> gpuMeshes;
+    GPUMeshUploader::uploadScene(
+        *context,
+        computeDescriptorPool,
+        cullPipeline->getDescriptorSetLayout(),
+        meshletDatas,
+        gpuScene,
+        gpuMeshes
+    );
+
+    for (size_t i = 0; i < models.size(); ++i) {
+        models[i].gpuMesh = gpuMeshes[i];
+    }
+
+    // Propagate scene node transforms first to get correct world matrices
+    rootNode->updateWorldMatrix(glm::mat4(1.0f));
+
+    // Upload initial scene instances
+    updateSceneInstances();
     
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
@@ -146,8 +162,13 @@ void Engine::mainLoop() {
         inputController->update(deltaTime);
         
         if (inputController->isTabPressedThisFrame()) {
-            renderModeNanite = !renderModeNanite;
-            std::cout << "[Mode Switch] Render mode changed to: " << (renderModeNanite ? "NANITE" : "TRADITIONAL") << std::endl;
+            geometryPipeline = (geometryPipeline == GeometryPipeline::NANITE) ? GeometryPipeline::TRADITIONAL : GeometryPipeline::NANITE;
+            std::cout << "[Mode Switch] Geometry pipeline changed to: " << (geometryPipeline == GeometryPipeline::NANITE ? "NANITE" : "TRADITIONAL") << std::endl;
+        }
+
+        if (inputController->is4PressedThisFrame()) {
+            shadingPath = (shadingPath == ShadingPath::DEFERRED) ? ShadingPath::FORWARD : ShadingPath::DEFERRED;
+            std::cout << "[Shading Switch] Shading path changed to: " << (shadingPath == ShadingPath::DEFERRED ? "DEFERRED" : "FORWARD") << std::endl;
         }
 
         if (inputController->isLPressedThisFrame()) {
@@ -166,8 +187,13 @@ void Engine::mainLoop() {
         }
 
         if (inputController->isMPressedThisFrame()) {
-            activeModelIndex = (activeModelIndex + 1) % models.size();
-            std::cout << "[Asset Switch] Active model cycled to: " << models[activeModelIndex].name << std::endl;
+            activeModelIndex = (activeModelIndex + 1) % 4;
+            if (activeModelIndex < 3) {
+                std::cout << "[Asset Switch] Active model cycled to: " << models[activeModelIndex].name << std::endl;
+            } else {
+                std::cout << "[Asset Switch] Active model cycled to: Scattered Forest (120 instances)" << std::endl;
+            }
+            updateSceneInstances();
         }
 
         if (inputController->isHPressedThisFrame()) {
@@ -214,20 +240,30 @@ void Engine::mainLoop() {
         telemetryFrameCount++;
         if (telemetryFrameCount >= 60) {
             telemetryFrameCount = 0;
-            if (activeModelIndex < models.size()) {
-                const auto& activeAsset = models[activeModelIndex];
-                uint32_t drawCount = 0;
+            if (activeModelIndex < 4) {
+                uint32_t totalDrawCount = 0;
+                uint32_t totalClusterCount = 0;
                 uint32_t currentFrame = context->getCurrentFrameIndex();
-                
-                void* mappedData;
-                vmaMapMemory(context->getAllocator(), activeAsset.gpuMesh.drawCountAllocation[currentFrame], &mappedData);
-                drawCount = *static_cast<uint32_t*>(mappedData);
-                vmaUnmapMemory(context->getAllocator(), activeAsset.gpuMesh.drawCountAllocation[currentFrame]);
-                
-                std::cout << "[Telemetry] Render Mode: " << (renderModeNanite ? "NANITE" : "TRADITIONAL")
-                          << " | Model: " << activeAsset.name
-                          << " | Clusters Drawn: " << (renderModeNanite ? std::to_string(drawCount) : "N/A (All)")
-                          << " / " << activeAsset.gpuMesh.clusterCount
+                bool isNanite = (geometryPipeline == GeometryPipeline::NANITE);
+
+                totalClusterCount = gpuScene.totalCullTasks;
+                if (isNanite) {
+                    uint32_t drawCount = 0;
+                    if (gpuScene.drawCountBuffer[currentFrame] != VK_NULL_HANDLE) {
+                        void* mappedData = nullptr;
+                        vmaMapMemory(context->getAllocator(), gpuScene.drawCountAllocation[currentFrame], &mappedData);
+                        drawCount = *static_cast<uint32_t*>(mappedData);
+                        vmaUnmapMemory(context->getAllocator(), gpuScene.drawCountAllocation[currentFrame]);
+                    }
+                    totalDrawCount = drawCount;
+                }
+
+                std::string modelName = (activeModelIndex < 3) ? models[activeModelIndex].name : "Scattered Forest";
+                std::cout << "[Telemetry] Geometry: " << (isNanite ? "NANITE" : "TRADITIONAL")
+                          << " | Shading: " << (shadingPath == ShadingPath::DEFERRED ? "DEFERRED" : "FORWARD")
+                          << " | Model: " << modelName
+                          << " | Clusters Drawn: " << (isNanite ? std::to_string(totalDrawCount) : "N/A (All)")
+                          << " / " << totalClusterCount
                           << " | LOD: " << (lodEnabled ? "ON (" + std::to_string(lodThreshold) + "px)" : "OFF")
                           << " | HZB Culling: " << (hzbCullingEnabled ? "ON" : "OFF")
                           << std::endl;
@@ -251,56 +287,50 @@ void Engine::cleanup() {
     rootNode.reset();
     cameraNode = nullptr;
 
-    // Release GPU Mesh buffers
+    // Release GPU Scene buffers
     if (context) {
+        VkDevice device = context->getDevice();
         VmaAllocator allocator = context->getAllocator();
-        for (auto& asset : models) {
-            if (asset.gpuMesh.vertexBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.vertexBuffer, asset.gpuMesh.vertexAllocation);
-                asset.gpuMesh.vertexBuffer = VK_NULL_HANDLE;
+
+        if (gpuScene.vertexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, gpuScene.vertexBuffer, gpuScene.vertexAllocation);
+        }
+        if (gpuScene.indexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, gpuScene.indexBuffer, gpuScene.indexAllocation);
+        }
+        if (gpuScene.traditionalIndexBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, gpuScene.traditionalIndexBuffer, gpuScene.traditionalIndexAllocation);
+        }
+        if (gpuScene.boundsBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, gpuScene.boundsBuffer, gpuScene.boundsAllocation);
+        }
+        if (gpuScene.inputCommandsBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, gpuScene.inputCommandsBuffer, gpuScene.inputCommandsAllocation);
+        }
+
+        for (int i = 0; i < 2; ++i) {
+            if (gpuScene.instanceBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.instanceBuffer[i], gpuScene.instanceAllocation[i]);
             }
-            if (asset.gpuMesh.indexBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.indexBuffer, asset.gpuMesh.indexAllocation);
-                asset.gpuMesh.indexBuffer = VK_NULL_HANDLE;
+            if (gpuScene.cullTasksBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.cullTasksBuffer[i], gpuScene.cullTasksAllocation[i]);
             }
-            if (asset.gpuMesh.traditionalVertexBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.traditionalVertexBuffer, asset.gpuMesh.traditionalVertexAllocation);
-                asset.gpuMesh.traditionalVertexBuffer = VK_NULL_HANDLE;
+            if (gpuScene.traditionalIndirectBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.traditionalIndirectBuffer[i], gpuScene.traditionalIndirectAllocation[i]);
             }
-            if (asset.gpuMesh.traditionalIndexBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.traditionalIndexBuffer, asset.gpuMesh.traditionalIndexAllocation);
-                asset.gpuMesh.traditionalIndexBuffer = VK_NULL_HANDLE;
+            if (gpuScene.culledIndirectBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.culledIndirectBuffer[i], gpuScene.culledIndirectAllocation[i]);
             }
-            if (asset.gpuMesh.indirectBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.indirectBuffer, asset.gpuMesh.indirectAllocation);
-                asset.gpuMesh.indirectBuffer = VK_NULL_HANDLE;
+            if (gpuScene.drawCountBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.drawCountBuffer[i], gpuScene.drawCountAllocation[i]);
             }
-            for (int i = 0; i < 2; ++i) {
-                if (asset.gpuMesh.culledIndirectBuffer[i] != VK_NULL_HANDLE) {
-                    vmaDestroyBuffer(allocator, asset.gpuMesh.culledIndirectBuffer[i], asset.gpuMesh.culledIndirectAllocation[i]);
-                    asset.gpuMesh.culledIndirectBuffer[i] = VK_NULL_HANDLE;
-                    asset.gpuMesh.culledIndirectAllocation[i] = VK_NULL_HANDLE;
-                }
-                if (asset.gpuMesh.drawCountBuffer[i] != VK_NULL_HANDLE) {
-                    vmaDestroyBuffer(allocator, asset.gpuMesh.drawCountBuffer[i], asset.gpuMesh.drawCountAllocation[i]);
-                    asset.gpuMesh.drawCountBuffer[i] = VK_NULL_HANDLE;
-                    asset.gpuMesh.drawCountAllocation[i] = VK_NULL_HANDLE;
-                }
-                if (asset.gpuMesh.visibilityBuffer[i] != VK_NULL_HANDLE) {
-                    vmaDestroyBuffer(allocator, asset.gpuMesh.visibilityBuffer[i], asset.gpuMesh.visibilityAllocation[i]);
-                    asset.gpuMesh.visibilityBuffer[i] = VK_NULL_HANDLE;
-                    asset.gpuMesh.visibilityAllocation[i] = VK_NULL_HANDLE;
-                }
+            if (gpuScene.visibilityBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.visibilityBuffer[i], gpuScene.visibilityAllocation[i]);
             }
-            if (asset.gpuMesh.boundsBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, asset.gpuMesh.boundsBuffer, asset.gpuMesh.boundsAllocation);
-                asset.gpuMesh.boundsBuffer = VK_NULL_HANDLE;
-                asset.gpuMesh.boundsAllocation = VK_NULL_HANDLE;
-            }
-            if (asset.gpuMesh.hzbSampler != VK_NULL_HANDLE) {
-                vkDestroySampler(context->getDevice(), asset.gpuMesh.hzbSampler, nullptr);
-                asset.gpuMesh.hzbSampler = VK_NULL_HANDLE;
-            }
+        }
+
+        if (gpuScene.hzbSampler != VK_NULL_HANDLE) {
+            vkDestroySampler(device, gpuScene.hzbSampler, nullptr);
         }
     }
     models.clear();
@@ -339,20 +369,22 @@ void Engine::recreateSwapChain() {
     vkDeviceWaitIdle(context->getDevice());
     context->recreateSwapChain();
 
-    if (hzbPipeline) {
-        hzbPipeline->updateDescriptorSets();
+    if (renderer) {
+        renderer->updateHzbDescriptorSets();
     }
-    if (debugPipeline) {
-        debugPipeline->updateDescriptorSets();
+    if (debugPipeline && renderer) {
+        debugPipeline->updateDescriptorSets(
+            renderer->getHzbImageView(0),
+            renderer->getHzbImageView(1)
+        );
     }
 
     if (renderer) {
         renderer->recreateVisBuffer();
     }
 
-    for (auto& asset : models) {
-        GPUMeshUploader::updateDescriptorSets(*context, asset.gpuMesh);
-    }
+    // Recreate/update descriptor sets with the new visBuffer image view
+    updateSceneInstances();
 }
 
 void Engine::handleWindowRefresh() {
@@ -367,4 +399,87 @@ void Engine::handleWindowRefresh() {
     rootNode->updateWorldMatrix(glm::mat4(1.0f));
 
     renderer->drawFrame(*this);
+}
+
+void Engine::updateSceneInstances() {
+    std::vector<std::vector<glm::mat4>> modelInstances(models.size());
+
+    if (activeModelIndex < 3) {
+        glm::mat4 baseTransform = models[activeModelIndex].sceneNode->getWorldMatrix();
+        modelInstances[activeModelIndex].push_back(baseTransform);
+    } else {
+        int bunnyCount = 0;
+        int lucyCount = 0;
+        int torusCount = 0;
+
+        int cols = 11;
+        int rows = 11;
+        float spacing = 2.2f;
+        float startX = -((cols - 1) * spacing) / 2.0f;
+        float startZ = -((rows - 1) * spacing) / 2.0f;
+
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                if (bunnyCount + lucyCount + torusCount >= 120) break;
+                
+                float x = startX + c * spacing;
+                float z = startZ + r * spacing;
+                
+                float offsetX = (static_cast<float>((r * 7 + c * 13) % 10) / 10.0f - 0.5f) * 0.5f;
+                float offsetZ = (static_cast<float>((r * 13 + c * 7) % 10) / 10.0f - 0.5f) * 0.5f;
+                
+                glm::vec3 pos = glm::vec3(x + offsetX, 0.0f, z + offsetZ);
+                
+                int modelType = (bunnyCount + lucyCount + torusCount) % 3;
+                
+                if (modelType == 0 && bunnyCount >= 40) {
+                    modelType = (lucyCount < 40) ? 1 : 2;
+                }
+                if (modelType == 1 && lucyCount >= 40) {
+                    modelType = (torusCount < 40) ? 2 : 0;
+                }
+                if (modelType == 2 && torusCount >= 40) {
+                    modelType = (bunnyCount < 40) ? 0 : 1;
+                }
+                
+                glm::mat4 mat = glm::mat4(1.0f);
+                
+                if (modelType == 0) {
+                    pos.y = -0.7f;
+                    mat = glm::translate(mat, pos);
+                    mat = glm::scale(mat, glm::vec3(1.0f));
+                    modelInstances[0].push_back(mat);
+                    bunnyCount++;
+                } else if (modelType == 1) {
+                    pos.y = -0.8f;
+                    mat = glm::translate(mat, pos);
+                    mat = glm::scale(mat, glm::vec3(0.002f));
+                    modelInstances[1].push_back(mat);
+                    lucyCount++;
+                } else {
+                    pos.y = 0.0f;
+                    mat = glm::translate(mat, pos);
+                    mat = glm::scale(mat, glm::vec3(0.25f));
+                    modelInstances[2].push_back(mat);
+                    torusCount++;
+                }
+            }
+        }
+    }
+
+    std::vector<GPUMesh> gpuMeshes(models.size());
+    for (size_t i = 0; i < models.size(); ++i) {
+        gpuMeshes[i] = models[i].gpuMesh;
+    }
+
+    GPUMeshUploader::uploadSceneInstances(*context, gpuScene, gpuMeshes, modelInstances);
+
+    GPUMeshUploader::updateDescriptorSets(
+        *context,
+        gpuScene,
+        renderer->getHzbImageView(0),
+        renderer->getHzbImageView(1),
+        renderer->getVisBufferImageView(),
+        renderer->getVisBufferSampler()
+    );
 }

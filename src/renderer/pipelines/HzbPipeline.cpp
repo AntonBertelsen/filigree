@@ -6,7 +6,6 @@
 HzbPipeline::HzbPipeline(VulkanContext& context) : context(context) {
     createPipeline();
     createDescriptorPoolAndSets();
-    updateDescriptorSets();
 }
 
 HzbPipeline::~HzbPipeline() {
@@ -174,7 +173,7 @@ void HzbPipeline::createDescriptorPoolAndSets() {
     }
 }
 
-void HzbPipeline::updateDescriptorSets() {
+void HzbPipeline::updateDescriptorSets(const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews) {
     VkDevice device = context.getDevice();
 
     for (int f = 0; f < 2; f++) {
@@ -186,12 +185,12 @@ void HzbPipeline::updateDescriptorSets() {
 
             // Input HZB view is Level L-1 (or Level 0 if L == 0 as a dummy binding)
             VkDescriptorImageInfo inHzbInfo{};
-            inHzbInfo.imageView = context.getHzbLevelImageView(f, l > 0 ? l - 1 : 0);
+            inHzbInfo.imageView = hzbLevelImageViews[f][l > 0 ? l - 1 : 0];
             inHzbInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             // Output HZB view is Level L
             VkDescriptorImageInfo outHzbInfo{};
-            outHzbInfo.imageView = context.getHzbLevelImageView(f, l);
+            outHzbInfo.imageView = hzbLevelImageViews[f][l];
             outHzbInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             std::array<VkWriteDescriptorSet, 3> writes{};

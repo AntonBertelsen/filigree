@@ -41,8 +41,6 @@ set(SOURCES
     src/renderer/pipelines/ResolvePipeline.cpp
     src/renderer/pipelines/CullPipeline.hpp
     src/renderer/pipelines/CullPipeline.cpp
-    src/geometry/MeshletBuilder.hpp
-    src/geometry/MeshletBuilder.cpp
     src/geometry/ClusterDAGBuilder.hpp
     src/geometry/ClusterDAGBuilder.cpp
     src/geometry/GPUMesh.hpp
@@ -52,6 +50,19 @@ set(SOURCES
     src/core/InputController.cpp
     src/renderer/VulkanRenderer.hpp
     src/renderer/VulkanRenderer.cpp
+    src/renderer/passes/IRenderPass.hpp
+    src/renderer/passes/CullComputePass.hpp
+    src/renderer/passes/CullComputePass.cpp
+    src/renderer/passes/HzbDownsamplePass.hpp
+    src/renderer/passes/HzbDownsamplePass.cpp
+    src/renderer/passes/VisBufferPass.hpp
+    src/renderer/passes/VisBufferPass.cpp
+    src/renderer/passes/ResolvePass.hpp
+    src/renderer/passes/ResolvePass.cpp
+    src/renderer/passes/ForwardPass.hpp
+    src/renderer/passes/ForwardPass.cpp
+    src/renderer/passes/DebugOverlayPass.hpp
+    src/renderer/passes/DebugOverlayPass.cpp
     src/renderer/pipelines/HzbPipeline.hpp
     src/renderer/pipelines/HzbPipeline.cpp
     src/renderer/pipelines/DebugPipeline.hpp

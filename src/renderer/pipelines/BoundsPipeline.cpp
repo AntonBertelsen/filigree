@@ -18,8 +18,8 @@ void BoundsPipeline::bind(VkCommandBuffer cb) {
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 }
 
-void BoundsPipeline::pushConstants(VkCommandBuffer cb, const glm::mat4& viewProj) {
-    vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
+void BoundsPipeline::pushConstants(VkCommandBuffer cb, const BoundsPushConstants& pcs) {
+    vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(BoundsPushConstants), &pcs);
 }
 
 void BoundsPipeline::createPipeline() {
@@ -108,7 +108,7 @@ void BoundsPipeline::createPipeline() {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(glm::mat4); // Matrix to hold viewProj
+    pushConstantRange.size = sizeof(BoundsPushConstants); // viewProj
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

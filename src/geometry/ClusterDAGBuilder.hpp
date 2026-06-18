@@ -2,9 +2,20 @@
 
 #include "scene/MeshNode.hpp"
 #include "renderer/pipelines/CullPipeline.hpp"
-#include "geometry/MeshletBuilder.hpp"
 #include <vector>
 #include <cstdint>
+
+struct MeshletData {
+    std::vector<MeshVertex> flatVertices;
+    std::vector<uint16_t> flatIndices;
+    std::vector<VkDrawIndexedIndirectCommand> indirectCommands;
+    std::vector<MeshletBounds> boundsList;
+    uint32_t clusterCount = 0;
+
+    // Original geometry data for traditional rendering
+    std::vector<MeshVertex> originalVertices;
+    std::vector<uint32_t> originalIndices;
+};
 
 struct DAGCluster {
     std::vector<MeshVertex> vertices;

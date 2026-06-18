@@ -17,9 +17,25 @@ class VulkanRenderer;
 class InputController;
 class HzbPipeline;
 class DebugPipeline;
+class CullComputePass;
+class HzbDownsamplePass;
+class VisBufferPass;
+class ResolvePass;
+class ForwardPass;
+class DebugOverlayPass;
 
 class Engine {
 public:
+    enum class GeometryPipeline {
+        TRADITIONAL,
+        NANITE
+    };
+
+    enum class ShadingPath {
+        FORWARD,
+        DEFERRED
+    };
+
     Engine();
     ~Engine();
 
@@ -36,11 +52,18 @@ public:
     // Grant access to sub-systems
     friend class VulkanRenderer;
     friend class InputController;
+    friend class CullComputePass;
+    friend class HzbDownsamplePass;
+    friend class VisBufferPass;
+    friend class ResolvePass;
+    friend class ForwardPass;
+    friend class DebugOverlayPass;
 
 private:
     void initWindow();
     void mainLoop();
     void cleanup();
+    void updateSceneInstances();
 
     // Window configuration
     const uint32_t WIDTH = 800;
@@ -73,10 +96,12 @@ private:
     };
 
     std::vector<ModelAsset> models;
+    GPUScene gpuScene;
     uint32_t activeModelIndex = 0;
 
     // Toggles and debug configurations
-    bool renderModeNanite = true;
+    GeometryPipeline geometryPipeline = GeometryPipeline::NANITE;
+    ShadingPath shadingPath = ShadingPath::DEFERRED;
     bool hzbCullingEnabled = true;
     bool debugVisualiseHzb = false;
     uint32_t debugHzbMipLevel = 0;

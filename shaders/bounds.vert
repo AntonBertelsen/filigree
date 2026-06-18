@@ -1,5 +1,17 @@
 #version 450
 
+struct InstanceData {
+    mat4 modelMatrix;
+    uint baseVertexOffset;
+    uint baseIndexOffset;
+    uint firstMeshletCommandOffset;
+    uint isNanite;
+};
+
+layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
 } pcs;
@@ -20,15 +32,33 @@ layout(std430, set = 0, binding = 5) readonly buffer Visibility {
     uint visibilities[];
 };
 
+struct CullTask {
+    uint globalInstIdx;
+    uint clustIdx;
+};
+
+layout(std430, set = 0, binding = 7) readonly buffer CullTasks {
+    CullTask tasks[];
+};
+
 layout(location = 0) out vec3 outColor;
 
 void main() {
     uint vertexID = gl_VertexIndex;      // 0 to 95 for 3 circles of 16 segments
-    uint instanceID = gl_InstanceIndex;  // meshlet index
+    uint instanceID = gl_InstanceIndex;  // cull task index
     
-    vec4 centerRadius = bounds[instanceID].sphereCenterRadius;
+    CullTask task = tasks[instanceID];
+    uint instIdx = task.globalInstIdx;
+    uint clustIdx = task.clustIdx;
+    
+    InstanceData inst = instances[instIdx];
+    mat4 modelMatrix = inst.modelMatrix;
+    uint boundsIdx = inst.firstMeshletCommandOffset + clustIdx;
+    
+    vec4 centerRadius = bounds[boundsIdx].sphereCenterRadius;
     vec3 center = centerRadius.xyz;
     float radius = centerRadius.w;
+    
     uint visible = visibilities[instanceID];
     
     // Discard LOD-culled bounding spheres to keep the debug view clean
@@ -37,6 +67,11 @@ void main() {
         outColor = vec3(0.0);
         return;
     }
+    
+    // Transform center and radius to world space
+    vec3 worldCenter = (modelMatrix * vec4(center, 1.0)).xyz;
+    float modelScale = max(length(modelMatrix[0].xyz), max(length(modelMatrix[1].xyz), length(modelMatrix[2].xyz)));
+    float worldRadius = radius * modelScale;
     
     // 3 circles: XY, YZ, ZX
     // Each circle has 16 segments (32 vertices)
@@ -58,7 +93,7 @@ void main() {
         localPos = vec3(s, 0.0, c);
     }
     
-    vec3 worldPos = center + localPos * radius;
+    vec3 worldPos = worldCenter + localPos * worldRadius;
     gl_Position = pcs.viewProj * vec4(worldPos, 1.0);
     
     // Color coding based on culling status:

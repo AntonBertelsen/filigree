@@ -3,6 +3,8 @@
 #include "core/VulkanContext.hpp"
 #include <glm/glm.hpp>
 
+#include <array>
+
 struct HzbPushConstants {
     glm::ivec2 srcSize;
     int32_t srcLevel;
@@ -22,7 +24,7 @@ public:
 
     void recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel);
 
-    void updateDescriptorSets();
+    void updateDescriptorSets(const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews);
 
 private:
     void createPipeline();

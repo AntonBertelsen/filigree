@@ -7,7 +7,6 @@
 DebugPipeline::DebugPipeline(VulkanContext& context) : context(context) {
     createPipeline();
     createDescriptorPoolAndSets();
-    updateDescriptorSets();
 }
 
 DebugPipeline::~DebugPipeline() {
@@ -234,8 +233,10 @@ void DebugPipeline::createDescriptorPoolAndSets() {
     }
 }
 
-void DebugPipeline::updateDescriptorSets() {
+void DebugPipeline::updateDescriptorSets(VkImageView hzbImageView0, VkImageView hzbImageView1) {
     VkDevice device = context.getDevice();
+
+    VkImageView hzbViews[2] = { hzbImageView0, hzbImageView1 };
 
     for (int i = 0; i < 2; i++) {
         // Sample the HZB of the *other* frame
@@ -243,7 +244,7 @@ void DebugPipeline::updateDescriptorSets() {
 
         VkDescriptorImageInfo imageInfo{};
         imageInfo.sampler = hzbSampler;
-        imageInfo.imageView = context.getHzbImageView(srcFrame);
+        imageInfo.imageView = hzbViews[srcFrame];
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkWriteDescriptorSet write{};

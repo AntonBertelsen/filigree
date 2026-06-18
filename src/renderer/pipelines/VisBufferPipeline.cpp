@@ -5,7 +5,8 @@
 #include <stdexcept>
 #include <array>
 
-VisBufferPipeline::VisBufferPipeline(VulkanContext& context) : context(context) {
+VisBufferPipeline::VisBufferPipeline(VulkanContext& context, VkDescriptorSetLayout cullDescriptorSetLayout) 
+    : context(context), cullDescriptorSetLayout(cullDescriptorSetLayout) {
     createPipeline();
 }
 
@@ -135,8 +136,8 @@ void VisBufferPipeline::createPipeline() {
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pSetLayouts = nullptr;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &cullDescriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 

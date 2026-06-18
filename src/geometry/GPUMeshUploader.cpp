@@ -1,242 +1,99 @@
 #include "geometry/GPUMeshUploader.hpp"
 #include <stdexcept>
 #include <array>
+#include <cstring>
+#include <iostream>
 
-void GPUMeshUploader::uploadMesh(
+void GPUMeshUploader::uploadScene(
     VulkanContext& context,
     VkDescriptorPool descriptorPool,
-    VkDescriptorSetLayout descriptorLayout,
-    const MeshletData& data,
-    GPUMesh& outMesh
+    VkDescriptorSetLayout globalLayout,
+    const std::vector<MeshletData>& meshletDatas,
+    GPUScene& outScene,
+    std::vector<GPUMesh>& outMeshes
 ) {
-    VulkanContext& ctx = context;
     VkDevice device = context.getDevice();
-    VmaAllocator allocator = context.getAllocator();
 
-    outMesh.clusterCount = data.clusterCount;
-    outMesh.totalIndexCount = static_cast<uint32_t>(data.flatIndices.size());
+    std::vector<MeshVertex> globalVertices;
+    std::vector<uint16_t> globalIndices;
+    std::vector<uint32_t> globalTraditionalIndices;
+    std::vector<MeshletBounds> globalBounds;
+    std::vector<VkDrawIndexedIndirectCommand> globalInputCommands;
 
-    // 1. Vertex Buffer
-    VkDeviceSize vertexBufferSize = sizeof(MeshVertex) * data.flatVertices.size();
-    
-    VkBuffer stagingVertexBuffer;
-    VmaAllocation stagingVertexAllocation;
-    ctx.createBuffer(
-        vertexBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_MEMORY_USAGE_AUTO,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-        stagingVertexBuffer,
-        stagingVertexAllocation
-    );
-    
-    void* vertexData;
-    vmaMapMemory(allocator, stagingVertexAllocation, &vertexData);
-    memcpy(vertexData, data.flatVertices.data(), vertexBufferSize);
-    vmaUnmapMemory(allocator, stagingVertexAllocation);
-    
-    ctx.createBuffer(
-        vertexBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        0,
-        outMesh.vertexBuffer,
-        outMesh.vertexAllocation
-    );
-    
-    ctx.copyBuffer(stagingVertexBuffer, outMesh.vertexBuffer, vertexBufferSize);
-    vmaDestroyBuffer(allocator, stagingVertexBuffer, stagingVertexAllocation);
-    
-    // 2. Index Buffer
-    VkDeviceSize indexBufferSize = sizeof(uint16_t) * data.flatIndices.size();
-    
-    VkBuffer stagingIndexBuffer;
-    VmaAllocation stagingIndexAllocation;
-    ctx.createBuffer(
-        indexBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_MEMORY_USAGE_AUTO,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-        stagingIndexBuffer,
-        stagingIndexAllocation
-    );
-    
-    void* indexData;
-    vmaMapMemory(allocator, stagingIndexAllocation, &indexData);
-    memcpy(indexData, data.flatIndices.data(), indexBufferSize);
-    vmaUnmapMemory(allocator, stagingIndexAllocation);
-    
-    ctx.createBuffer(
-        indexBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        0,
-        outMesh.indexBuffer,
-        outMesh.indexAllocation
-    );
-    
-    ctx.copyBuffer(stagingIndexBuffer, outMesh.indexBuffer, indexBufferSize);
-    vmaDestroyBuffer(allocator, stagingIndexBuffer, stagingIndexAllocation);
-    
-    // 3. Indirect Buffer
-    VkDeviceSize indirectBufferSize = sizeof(VkDrawIndexedIndirectCommand) * data.indirectCommands.size();
-    
-    VkBuffer stagingIndirectBuffer;
-    VmaAllocation stagingIndirectAllocation;
-    ctx.createBuffer(
-        indirectBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_MEMORY_USAGE_AUTO,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-        stagingIndirectBuffer,
-        stagingIndirectAllocation
-    );
-    
-    void* indirectData;
-    vmaMapMemory(allocator, stagingIndirectAllocation, &indirectData);
-    memcpy(indirectData, data.indirectCommands.data(), indirectBufferSize);
-    vmaUnmapMemory(allocator, stagingIndirectAllocation);
-    
-    ctx.createBuffer(
-        indirectBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        0,
-        outMesh.indirectBuffer,
-        outMesh.indirectAllocation
-    );
-    
-    ctx.copyBuffer(stagingIndirectBuffer, outMesh.indirectBuffer, indirectBufferSize);
-    vmaDestroyBuffer(allocator, stagingIndirectBuffer, stagingIndirectAllocation);
+    outMeshes.resize(meshletDatas.size());
 
-    // 4. Bounds Buffer
-    VkDeviceSize boundsBufferSize = sizeof(MeshletBounds) * data.boundsList.size();
+    for (size_t i = 0; i < meshletDatas.size(); ++i) {
+        const auto& data = meshletDatas[i];
+        auto& mesh = outMeshes[i];
 
-    VkBuffer stagingBoundsBuffer;
-    VmaAllocation stagingBoundsAllocation;
-    ctx.createBuffer(
-        boundsBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_MEMORY_USAGE_AUTO,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-        stagingBoundsBuffer,
-        stagingBoundsAllocation
-    );
+        mesh.baseVertexOffset = static_cast<uint32_t>(globalVertices.size());
+        mesh.baseIndexOffset = static_cast<uint32_t>(globalIndices.size());
+        mesh.firstMeshletCommandOffset = static_cast<uint32_t>(globalInputCommands.size());
+        mesh.clusterCount = data.clusterCount;
 
-    void* boundsData;
-    vmaMapMemory(allocator, stagingBoundsAllocation, &boundsData);
-    memcpy(boundsData, data.boundsList.data(), boundsBufferSize);
-    vmaUnmapMemory(allocator, stagingBoundsAllocation);
+        // Append Nanite vertices
+        globalVertices.insert(globalVertices.end(), data.flatVertices.begin(), data.flatVertices.end());
+        // Append Nanite indices
+        globalIndices.insert(globalIndices.end(), data.flatIndices.begin(), data.flatIndices.end());
+        // Append Bounds
+        globalBounds.insert(globalBounds.end(), data.boundsList.begin(), data.boundsList.end());
 
-    ctx.createBuffer(
-        boundsBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        0,
-        outMesh.boundsBuffer,
-        outMesh.boundsAllocation
-    );
+        // Append and adjust indirect commands
+        for (auto cmd : data.indirectCommands) {
+            cmd.firstIndex += mesh.baseIndexOffset;
+            cmd.vertexOffset += static_cast<int32_t>(mesh.baseVertexOffset);
+            globalInputCommands.push_back(cmd);
+        }
 
-    ctx.copyBuffer(stagingBoundsBuffer, outMesh.boundsBuffer, boundsBufferSize);
-    vmaDestroyBuffer(allocator, stagingBoundsBuffer, stagingBoundsAllocation);
+        // Append traditional vertices
+        mesh.traditionalVertexOffset = static_cast<uint32_t>(globalVertices.size());
+        globalVertices.insert(globalVertices.end(), data.originalVertices.begin(), data.originalVertices.end());
 
-    // 4.5. Traditional Rendering Buffers
-    if (!data.originalVertices.empty()) {
-        VkDeviceSize tradVertexBufferSize = sizeof(MeshVertex) * data.originalVertices.size();
-        
-        VkBuffer stagingTradVertexBuffer;
-        VmaAllocation stagingTradVertexAllocation;
-        ctx.createBuffer(
-            tradVertexBufferSize,
+        // Append traditional indices
+        mesh.traditionalIndexOffset = static_cast<uint32_t>(globalTraditionalIndices.size());
+        mesh.traditionalIndexCount = static_cast<uint32_t>(data.originalIndices.size());
+        globalTraditionalIndices.insert(globalTraditionalIndices.end(), data.originalIndices.begin(), data.originalIndices.end());
+    }
+
+    auto uploadBufferHelper = [&](VkBuffer& outBuffer, VmaAllocation& outAllocation, VkDeviceSize size, VkBufferUsageFlags usage, const void* data) {
+        if (size == 0) return;
+        VkBuffer stagingBuffer;
+        VmaAllocation stagingAllocation;
+        context.createBuffer(
+            size,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VMA_MEMORY_USAGE_AUTO,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            stagingTradVertexBuffer,
-            stagingTradVertexAllocation
+            stagingBuffer,
+            stagingAllocation
         );
-        
-        void* tradVertexData;
-        vmaMapMemory(allocator, stagingTradVertexAllocation, &tradVertexData);
-        memcpy(tradVertexData, data.originalVertices.data(), tradVertexBufferSize);
-        vmaUnmapMemory(allocator, stagingTradVertexAllocation);
-        
-        ctx.createBuffer(
-            tradVertexBufferSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+
+        void* mappedData = nullptr;
+        vmaMapMemory(context.getAllocator(), stagingAllocation, &mappedData);
+        memcpy(mappedData, data, size);
+        vmaUnmapMemory(context.getAllocator(), stagingAllocation);
+
+        context.createBuffer(
+            size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
             0,
-            outMesh.traditionalVertexBuffer,
-            outMesh.traditionalVertexAllocation
-        );
-        
-        ctx.copyBuffer(stagingTradVertexBuffer, outMesh.traditionalVertexBuffer, tradVertexBufferSize);
-        vmaDestroyBuffer(allocator, stagingTradVertexBuffer, stagingTradVertexAllocation);
-    }
-
-    if (!data.originalIndices.empty()) {
-        outMesh.traditionalIndexCount = static_cast<uint32_t>(data.originalIndices.size());
-        VkDeviceSize tradIndexBufferSize = sizeof(uint32_t) * data.originalIndices.size();
-        
-        VkBuffer stagingTradIndexBuffer;
-        VmaAllocation stagingTradIndexAllocation;
-        ctx.createBuffer(
-            tradIndexBufferSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VMA_MEMORY_USAGE_AUTO,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            stagingTradIndexBuffer,
-            stagingTradIndexAllocation
-        );
-        
-        void* tradIndexData;
-        vmaMapMemory(allocator, stagingTradIndexAllocation, &tradIndexData);
-        memcpy(tradIndexData, data.originalIndices.data(), tradIndexBufferSize);
-        vmaUnmapMemory(allocator, stagingTradIndexAllocation);
-        
-        ctx.createBuffer(
-            tradIndexBufferSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            0,
-            outMesh.traditionalIndexBuffer,
-            outMesh.traditionalIndexAllocation
-        );
-        
-        ctx.copyBuffer(stagingTradIndexBuffer, outMesh.traditionalIndexBuffer, tradIndexBufferSize);
-        vmaDestroyBuffer(allocator, stagingTradIndexBuffer, stagingTradIndexAllocation);
-    }
-
-    // 5. Allocate Culled Indirect Buffers, Draw Count Buffers, and Visibility Buffers (Double-Buffered)
-    for (int i = 0; i < 2; ++i) {
-        ctx.createBuffer(
-            indirectBufferSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            0,
-            outMesh.culledIndirectBuffer[i],
-            outMesh.culledIndirectAllocation[i]
+            outBuffer,
+            outAllocation
         );
 
-        ctx.createBuffer(
-            sizeof(uint32_t),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_AUTO,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-            outMesh.drawCountBuffer[i],
-            outMesh.drawCountAllocation[i]
-        );
+        context.copyBuffer(stagingBuffer, outBuffer, size);
+        vmaDestroyBuffer(context.getAllocator(), stagingBuffer, stagingAllocation);
+    };
 
-        ctx.createBuffer(
-            data.clusterCount * sizeof(uint32_t),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            0,
-            outMesh.visibilityBuffer[i],
-            outMesh.visibilityAllocation[i]
-        );
-    }
+    // Upload geometry buffers
+    uploadBufferHelper(outScene.vertexBuffer, outScene.vertexAllocation, globalVertices.size() * sizeof(MeshVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, globalVertices.data());
+    uploadBufferHelper(outScene.indexBuffer, outScene.indexAllocation, globalIndices.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, globalIndices.data());
+    uploadBufferHelper(outScene.traditionalIndexBuffer, outScene.traditionalIndexAllocation, globalTraditionalIndices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, globalTraditionalIndices.data());
+    uploadBufferHelper(outScene.boundsBuffer, outScene.boundsAllocation, globalBounds.size() * sizeof(MeshletBounds), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, globalBounds.data());
+    uploadBufferHelper(outScene.inputCommandsBuffer, outScene.inputCommandsAllocation, globalInputCommands.size() * sizeof(VkDrawIndexedIndirectCommand), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, globalInputCommands.data());
 
-    // Create HZB sampler (Nearest filtering for direct conservative footprint queries)
+    // Create HZB sampler
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_NEAREST;
@@ -255,125 +112,287 @@ void GPUMeshUploader::uploadMesh(
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = 11.0f;
 
-    if (vkCreateSampler(device, &samplerInfo, nullptr, &outMesh.hzbSampler) != VK_SUCCESS) {
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &outScene.hzbSampler) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create HZB sampler in GPUMeshUploader!");
     }
 
-    // 6. Write Descriptor Sets (Double-Buffered)
-    std::array<VkDescriptorSetLayout, 2> layouts = { descriptorLayout, descriptorLayout };
+    // Allocate Descriptor Sets
+    std::array<VkDescriptorSetLayout, 2> layouts = { globalLayout, globalLayout };
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = 2;
     allocInfo.pSetLayouts = layouts.data();
 
-    if (vkAllocateDescriptorSets(device, &allocInfo, outMesh.computeDescriptorSets) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate compute descriptor sets inside GPUMeshUploader!");
+    if (vkAllocateDescriptorSets(device, &allocInfo, outScene.globalDescriptorSets) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate global scene descriptor sets inside GPUMeshUploader!");
+    }
+}
+
+void GPUMeshUploader::uploadSceneInstances(
+    VulkanContext& context,
+    GPUScene& scene,
+    const std::vector<GPUMesh>& meshes,
+    const std::vector<std::vector<glm::mat4>>& modelInstances
+) {
+    VmaAllocator allocator = context.getAllocator();
+
+    std::vector<InstanceData> instances;
+    std::vector<CullTask> cullTasks;
+    std::vector<VkDrawIndexedIndirectCommand> traditionalCommands;
+
+    for (size_t meshIdx = 0; meshIdx < meshes.size(); ++meshIdx) {
+        if (meshIdx >= modelInstances.size()) continue;
+        const auto& mesh = meshes[meshIdx];
+        const auto& mats = modelInstances[meshIdx];
+
+        for (const auto& mat : mats) {
+            uint32_t globalInstIdx = static_cast<uint32_t>(instances.size());
+
+            InstanceData instData{};
+            instData.modelMatrix = mat;
+            instData.baseVertexOffset = mesh.traditionalVertexOffset;
+            instData.baseIndexOffset = mesh.traditionalIndexOffset;
+            instData.firstMeshletCommandOffset = mesh.firstMeshletCommandOffset;
+            instData.isNanite = 1;
+            instances.push_back(instData);
+
+            for (uint32_t c = 0; c < mesh.clusterCount; ++c) {
+                CullTask task{};
+                task.globalInstIdx = globalInstIdx;
+                task.clustIdx = c;
+                cullTasks.push_back(task);
+            }
+
+            // Traditional indirect draw command
+            VkDrawIndexedIndirectCommand tradCmd{};
+            tradCmd.indexCount = mesh.traditionalIndexCount;
+            tradCmd.instanceCount = 1;
+            tradCmd.firstIndex = mesh.traditionalIndexOffset;
+            tradCmd.vertexOffset = static_cast<int32_t>(mesh.traditionalVertexOffset);
+            tradCmd.firstInstance = globalInstIdx;
+            traditionalCommands.push_back(tradCmd);
+        }
     }
 
-    for (int i = 0; i < 2; ++i) {
-        // Allocate Sets
+    scene.totalCullTasks = static_cast<uint32_t>(cullTasks.size());
+    scene.totalInstances = static_cast<uint32_t>(instances.size());
+
+    if (instances.empty()) return;
+
+    VkDeviceSize instanceBufferSize = instances.size() * sizeof(InstanceData);
+    VkDeviceSize cullTasksBufferSize = cullTasks.size() * sizeof(CullTask);
+    VkDeviceSize indirectBufferSize = cullTasks.size() * sizeof(VkDrawIndexedIndirectCommand);
+    VkDeviceSize visibilityBufferSize = cullTasks.size() * sizeof(uint32_t);
+    VkDeviceSize tradIndirectBufferSize = traditionalCommands.size() * sizeof(VkDrawIndexedIndirectCommand);
+
+    auto updateBufferData = [&](VkBuffer& buffer, VmaAllocation& allocation, VkDeviceSize size, VkBufferUsageFlags usage, const void* data, VmaAllocationCreateFlags flags) {
+        if (buffer != VK_NULL_HANDLE) {
+            VmaAllocationInfo info;
+            vmaGetAllocationInfo(allocator, allocation, &info);
+            if (info.size < size) {
+                vmaDestroyBuffer(allocator, buffer, allocation);
+                buffer = VK_NULL_HANDLE;
+                allocation = VK_NULL_HANDLE;
+            }
+        }
+        if (buffer == VK_NULL_HANDLE) {
+            context.createBuffer(size, usage, VMA_MEMORY_USAGE_AUTO, flags, buffer, allocation);
+        }
+        void* mapped = nullptr;
+        vmaMapMemory(allocator, allocation, &mapped);
+        memcpy(mapped, data, size);
+        vmaUnmapMemory(allocator, allocation);
+    };
+
+    auto resizeDeviceBuffer = [&](VkBuffer& buffer, VmaAllocation& allocation, VkDeviceSize size, VkBufferUsageFlags usage) {
+        if (buffer != VK_NULL_HANDLE) {
+            VmaAllocationInfo info;
+            vmaGetAllocationInfo(allocator, allocation, &info);
+            if (info.size < size) {
+                vmaDestroyBuffer(allocator, buffer, allocation);
+                buffer = VK_NULL_HANDLE;
+                allocation = VK_NULL_HANDLE;
+            }
+        }
+        if (buffer == VK_NULL_HANDLE) {
+            context.createBuffer(size, usage, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0, buffer, allocation);
+        }
+    };
+
+    for (int i = 0; i < 2; i++) {
+        updateBufferData(scene.instanceBuffer[i], scene.instanceAllocation[i], instanceBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, instances.data(), VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        updateBufferData(scene.cullTasksBuffer[i], scene.cullTasksAllocation[i], cullTasksBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, cullTasks.data(), VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        updateBufferData(scene.traditionalIndirectBuffer[i], scene.traditionalIndirectAllocation[i], tradIndirectBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, traditionalCommands.data(), VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        resizeDeviceBuffer(scene.culledIndirectBuffer[i], scene.culledIndirectAllocation[i], indirectBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        
+        // drawCountBuffer: Alloc size is sizeof(uint32_t), so we can just update it
+        uint32_t zero = 0;
+        updateBufferData(scene.drawCountBuffer[i], scene.drawCountAllocation[i], sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &zero, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+        
+        resizeDeviceBuffer(scene.visibilityBuffer[i], scene.visibilityAllocation[i], visibilityBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     }
-    // We already allocated them above!
-    // Actually, `outMesh.computeDescriptorSets` is populated.
-    
-    updateDescriptorSets(context, outMesh);
 }
 
 void GPUMeshUploader::updateDescriptorSets(
     VulkanContext& context,
-    GPUMesh& outMesh
+    GPUScene& scene,
+    VkImageView hzbImageView0,
+    VkImageView hzbImageView1,
+    VkImageView visBufferImageView,
+    VkSampler visBufferSampler
 ) {
     VkDevice device = context.getDevice();
 
     for (int i = 0; i < 2; ++i) {
-        VkDescriptorBufferInfo inputInfo{};
-        inputInfo.buffer = outMesh.indirectBuffer;
-        inputInfo.offset = 0;
-        inputInfo.range = VK_WHOLE_SIZE;
+        if (scene.globalDescriptorSets[i] == VK_NULL_HANDLE) continue;
 
-        VkDescriptorBufferInfo outputInfo{};
-        outputInfo.buffer = outMesh.culledIndirectBuffer[i];
-        outputInfo.offset = 0;
-        outputInfo.range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo inputCommandsInfo{};
+        inputCommandsInfo.buffer = scene.inputCommandsBuffer;
+        inputCommandsInfo.offset = 0;
+        inputCommandsInfo.range = VK_WHOLE_SIZE;
 
-        VkDescriptorBufferInfo countInfo{};
-        countInfo.buffer = outMesh.drawCountBuffer[i];
-        countInfo.offset = 0;
-        countInfo.range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo culledIndirectInfo{};
+        culledIndirectInfo.buffer = scene.culledIndirectBuffer[i] != VK_NULL_HANDLE ? scene.culledIndirectBuffer[i] : scene.inputCommandsBuffer;
+        culledIndirectInfo.offset = 0;
+        culledIndirectInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo drawCountInfo{};
+        drawCountInfo.buffer = scene.drawCountBuffer[i] != VK_NULL_HANDLE ? scene.drawCountBuffer[i] : scene.inputCommandsBuffer;
+        drawCountInfo.offset = 0;
+        drawCountInfo.range = VK_WHOLE_SIZE;
 
         VkDescriptorBufferInfo boundsInfo{};
-        boundsInfo.buffer = outMesh.boundsBuffer;
+        boundsInfo.buffer = scene.boundsBuffer;
         boundsInfo.offset = 0;
         boundsInfo.range = VK_WHOLE_SIZE;
 
-        // Source HZB view for frame i is the HZB image from the OTHER frame (i + 1) % 2
         VkDescriptorImageInfo hzbImageInfo{};
-        hzbImageInfo.sampler = outMesh.hzbSampler;
-        hzbImageInfo.imageView = context.getHzbImageView((i + 1) % 2);
+        hzbImageInfo.sampler = scene.hzbSampler;
+        hzbImageInfo.imageView = ((i + 1) % 2 == 0) ? hzbImageView0 : hzbImageView1;
         hzbImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkDescriptorBufferInfo visibilityInfo{};
-        visibilityInfo.buffer = outMesh.visibilityBuffer[i];
+        visibilityInfo.buffer = scene.visibilityBuffer[i] != VK_NULL_HANDLE ? scene.visibilityBuffer[i] : scene.inputCommandsBuffer;
         visibilityInfo.offset = 0;
         visibilityInfo.range = VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
+        VkDescriptorBufferInfo instanceInfo{};
+        instanceInfo.buffer = scene.instanceBuffer[i] != VK_NULL_HANDLE ? scene.instanceBuffer[i] : scene.inputCommandsBuffer;
+        instanceInfo.offset = 0;
+        instanceInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo cullTasksInfo{};
+        cullTasksInfo.buffer = scene.cullTasksBuffer[i] != VK_NULL_HANDLE ? scene.cullTasksBuffer[i] : scene.inputCommandsBuffer;
+        cullTasksInfo.offset = 0;
+        cullTasksInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo vertexInfo{};
+        vertexInfo.buffer = scene.vertexBuffer;
+        vertexInfo.offset = 0;
+        vertexInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo indexInfo{};
+        indexInfo.buffer = scene.indexBuffer;
+        indexInfo.offset = 0;
+        indexInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorImageInfo visBufferImageInfo{};
+        visBufferImageInfo.sampler = visBufferSampler;
+        visBufferImageInfo.imageView = visBufferImageView;
+        visBufferImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorBufferInfo traditionalIndexInfo{};
+        traditionalIndexInfo.buffer = scene.traditionalIndexBuffer;
+        traditionalIndexInfo.offset = 0;
+        traditionalIndexInfo.range = VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 12> writes{};
         
-        // Binding 0: Input Commands
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].dstArrayElement = 0;
-        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &inputInfo;
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = scene.globalDescriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &inputCommandsInfo;
 
-        // Binding 1: Output Commands
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pBufferInfo = &outputInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = scene.globalDescriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo = &culledIndirectInfo;
 
-        // Binding 2: Draw Count
-        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[2].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[2].dstBinding = 2;
-        descriptorWrites[2].dstArrayElement = 0;
-        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[2].descriptorCount = 1;
-        descriptorWrites[2].pBufferInfo = &countInfo;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = scene.globalDescriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo = &drawCountInfo;
 
-        // Binding 3: Meshlet Bounds
-        descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[3].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[3].dstBinding = 3;
-        descriptorWrites[3].dstArrayElement = 0;
-        descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[3].descriptorCount = 1;
-        descriptorWrites[3].pBufferInfo = &boundsInfo;
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = scene.globalDescriptorSets[i];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[3].descriptorCount = 1;
+        writes[3].pBufferInfo = &boundsInfo;
 
-        // Binding 4: HZB Texture (Sampled Image)
-        descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[4].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[4].dstBinding = 4;
-        descriptorWrites[4].dstArrayElement = 0;
-        descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[4].descriptorCount = 1;
-        descriptorWrites[4].pImageInfo = &hzbImageInfo;
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = scene.globalDescriptorSets[i];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo = &hzbImageInfo;
 
-        // Binding 5: Visibilities
-        descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[5].dstSet = outMesh.computeDescriptorSets[i];
-        descriptorWrites[5].dstBinding = 5;
-        descriptorWrites[5].dstArrayElement = 0;
-        descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[5].descriptorCount = 1;
-        descriptorWrites[5].pBufferInfo = &visibilityInfo;
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = scene.globalDescriptorSets[i];
+        writes[5].dstBinding = 5;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[5].descriptorCount = 1;
+        writes[5].pBufferInfo = &visibilityInfo;
 
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet = scene.globalDescriptorSets[i];
+        writes[6].dstBinding = 6;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].descriptorCount = 1;
+        writes[6].pBufferInfo = &instanceInfo;
+
+        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet = scene.globalDescriptorSets[i];
+        writes[7].dstBinding = 7;
+        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[7].descriptorCount = 1;
+        writes[7].pBufferInfo = &cullTasksInfo;
+
+        writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[8].dstSet = scene.globalDescriptorSets[i];
+        writes[8].dstBinding = 8;
+        writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[8].descriptorCount = 1;
+        writes[8].pBufferInfo = &vertexInfo;
+
+        writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[9].dstSet = scene.globalDescriptorSets[i];
+        writes[9].dstBinding = 9;
+        writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[9].descriptorCount = 1;
+        writes[9].pBufferInfo = &indexInfo;
+
+        writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[10].dstSet = scene.globalDescriptorSets[i];
+        writes[10].dstBinding = 10;
+        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[10].descriptorCount = 1;
+        writes[10].pImageInfo = &visBufferImageInfo;
+
+        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet = scene.globalDescriptorSets[i];
+        writes[11].dstBinding = 11;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[11].descriptorCount = 1;
+        writes[11].pBufferInfo = &traditionalIndexInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 }

@@ -7,7 +7,7 @@
 
 class VisBufferPipeline {
 public:
-    VisBufferPipeline(VulkanContext& context);
+    VisBufferPipeline(VulkanContext& context, VkDescriptorSetLayout cullDescriptorSetLayout);
     ~VisBufferPipeline();
 
     // Prevent copying
@@ -19,6 +19,7 @@ public:
 
     struct VisBufferPushConstants {
         glm::mat4 viewProj;
+        uint32_t isNaniteMode;
     };
 
     void bind(VkCommandBuffer cb);
@@ -29,6 +30,7 @@ private:
     void cleanup();
 
     VulkanContext& context;
+    VkDescriptorSetLayout cullDescriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
 };

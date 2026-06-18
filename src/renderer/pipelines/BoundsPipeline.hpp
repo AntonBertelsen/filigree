@@ -17,8 +17,12 @@ public:
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
     VkPipeline getGraphicsPipeline() const { return graphicsPipeline; }
 
+    struct BoundsPushConstants {
+        glm::mat4 viewProj;
+    };
+
     void bind(VkCommandBuffer cb);
-    void pushConstants(VkCommandBuffer cb, const glm::mat4& viewProj);
+    void pushConstants(VkCommandBuffer cb, const BoundsPushConstants& pcs);
 
 private:
     void createPipeline();
