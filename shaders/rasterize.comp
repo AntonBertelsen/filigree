@@ -1,0 +1,182 @@
+#version 450
+#extension GL_EXT_shader_atomic_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+struct VkDrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+struct InstanceData {
+    mat4 modelMatrix;
+    uint baseVertexOffset;
+    uint baseIndexOffset;
+    uint firstMeshletCommandOffset;
+    uint isNanite;
+};
+
+struct MeshVertex {
+    float px, py, pz;
+    float nx, ny, nz;
+    float u, v;
+};
+
+// Bindings
+layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
+layout(std430, set = 0, binding = 8) readonly buffer Vertices {
+    MeshVertex vertices[];
+};
+
+layout(std430, set = 0, binding = 9) readonly buffer NaniteIndices {
+    uint packedNaniteIndices[];
+};
+
+layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
+    uint64_t visBuffer[];
+};
+
+layout(std430, set = 0, binding = 12) readonly buffer SoftwareOutputCommands {
+    VkDrawIndexedIndirectCommand softwareOutputs[];
+};
+
+layout(std430, set = 0, binding = 13) readonly buffer SoftwareDrawCount {
+    uint softwareCount;
+    uint softwareCountY;
+    uint softwareCountZ;
+};
+
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+    uint isNaniteMode;
+    float viewportWidth;
+    float viewportHeight;
+} pcs;
+
+// Helper to decode 16-bit indices
+uint getIndex(uint indexOffset) {
+    uint wordIdx = indexOffset / 2;
+    uint pair = packedNaniteIndices[wordIdx];
+    if (indexOffset % 2 == 0) {
+        return pair & 0xFFFFu;
+    } else {
+        return (pair >> 16) & 0xFFFFu;
+    }
+}
+
+shared vec4 sharedPos[64];
+shared vec2 sharedScreenPos[64];
+
+void main() {
+    uint groupIdx = gl_WorkGroupID.x;
+    
+    // Bounds check against actual software cluster count
+    if (groupIdx >= softwareCount) {
+        return;
+    }
+    
+    VkDrawIndexedIndirectCommand cmd = softwareOutputs[groupIdx];
+    uint firstIndex = cmd.firstIndex;
+    int vertexOffset = cmd.vertexOffset;
+    uint triangleCount = cmd.indexCount / 3;
+    uint firstInstance = cmd.firstInstance;
+    
+    // Unpack instance index and cluster index
+    uint instIdx = firstInstance >> 16;
+    uint clustIdx = firstInstance & 0xFFFFu;
+    
+    InstanceData inst = instances[instIdx];
+    mat4 modelMatrix = inst.modelMatrix;
+    
+    uint localThreadIdx = gl_LocalInvocationID.x;
+    
+    // Cooperatively project up to 64 vertices
+    if (localThreadIdx < 64) {
+        uint vIdx = uint(vertexOffset) + localThreadIdx;
+        MeshVertex v = vertices[vIdx];
+        vec4 worldPos = modelMatrix * vec4(v.px, v.py, v.pz, 1.0);
+        vec4 clipPos = pcs.viewProj * worldPos;
+        sharedPos[localThreadIdx] = clipPos;
+        sharedScreenPos[localThreadIdx] = (clipPos.xy / clipPos.w * 0.5 + 0.5) * vec2(pcs.viewportWidth, pcs.viewportHeight);
+    }
+    
+    barrier();
+    
+    // Each thread processes one triangle
+    if (localThreadIdx < triangleCount) {
+        uint triIndex = localThreadIdx;
+        
+        uint localIdx0 = getIndex(firstIndex + triIndex * 3 + 0);
+        uint localIdx1 = getIndex(firstIndex + triIndex * 3 + 1);
+        uint localIdx2 = getIndex(firstIndex + triIndex * 3 + 2);
+        
+        vec4 p0 = sharedPos[localIdx0];
+        vec4 p1 = sharedPos[localIdx1];
+        vec4 p2 = sharedPos[localIdx2];
+        
+        // Skip if any vertex is behind the camera near plane
+        if (p0.w <= 0.0 || p1.w <= 0.0 || p2.w <= 0.0) {
+            return;
+        }
+        
+        vec2 v0 = sharedScreenPos[localIdx0];
+        vec2 v1 = sharedScreenPos[localIdx1];
+        vec2 v2 = sharedScreenPos[localIdx2];
+        
+        vec2 e0 = v1 - v0;
+        vec2 e1 = v2 - v0;
+        
+        float den = e0.x * e1.y - e1.x * e0.y;
+        
+        // Backface culling: under Vulkan's Y-down screen coordinate system,
+        // CCW (front-facing) winding has a negative cross product.
+        if (den >= 0.0) {
+            return;
+        }
+        
+        // Calculate screen-space bounding box
+        float minX = min(v0.x, min(v1.x, v2.x));
+        float maxX = max(v0.x, max(v1.x, v2.x));
+        float minY = min(v0.y, min(v1.y, v2.y));
+        float maxY = max(v0.y, max(v1.y, v2.y));
+        
+        // Clamp bounding box to screen boundaries
+        int minX_i = max(0, int(floor(minX)));
+        int maxX_i = min(int(pcs.viewportWidth) - 1, int(ceil(maxX)));
+        int minY_i = max(0, int(floor(minY)));
+        int maxY_i = min(int(pcs.viewportHeight) - 1, int(ceil(maxY)));
+        
+        // Loop over pixels inside bounding box
+        for (int y = minY_i; y <= maxY_i; ++y) {
+            for (int x = minX_i; x <= maxX_i; ++x) {
+                vec2 p = vec2(x + 0.5, y + 0.5);
+                vec2 e2 = p - v0;
+                
+                float v = (e2.x * e1.y - e1.x * e2.y) / den;
+                float w = (e0.x * e2.y - e2.x * e0.y) / den;
+                float u = 1.0 - v - w;
+                
+                if (u >= 0.0 && v >= 0.0 && w >= 0.0) {
+                    float z = u * (p0.z / p0.w) + v * (p1.z / p1.w) + w * (p2.z / p2.w);
+                    z = clamp(z, 0.0, 1.0);
+                    
+                    uint depthInt = uint(z * 4294967295.0);
+                    
+                    // Pack payload: (instIdx << 22) | (clustIdx << 8) | triIndex
+                    uint payload = (instIdx << 22) | (clustIdx << 8) | triIndex;
+                    uint64_t packedVal = (uint64_t(depthInt) << 32) | uint64_t(payload);
+                    
+                    uint pixelIndex = uint(y) * uint(pcs.viewportWidth) + uint(x);
+                    atomicMin(visBuffer[pixelIndex], packedVal);
+                }
+            }
+        }
+    }
+}

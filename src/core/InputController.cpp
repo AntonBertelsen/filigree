@@ -138,4 +138,34 @@ void InputController::update(float deltaTime) {
         }
         key4WasPressed = current4State;
     }
+
+    // 15. Poll 5 Key (Toggle Rasterizer Mode)
+    key5PressedThisFrame = false;
+    if (window) {
+        bool current5State = (glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS);
+        if (current5State && !key5WasPressed) {
+            key5PressedThisFrame = true;
+        }
+        key5WasPressed = current5State;
+    }
+
+    // 16. Poll 6 Key (Toggle Hardware Path Mode)
+    key6PressedThisFrame = false;
+    if (window) {
+        bool current6State = (glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS);
+        if (current6State && !key6WasPressed) {
+            key6PressedThisFrame = true;
+        }
+        key6WasPressed = current6State;
+    }
+
+    // 17. Poll 7 Key (Toggle Synchronization Mode)
+    key7PressedThisFrame = false;
+    if (window) {
+        bool current7State = (glfwGetKey(window, GLFW_KEY_7) == GLFW_PRESS);
+        if (current7State && !key7WasPressed) {
+            key7PressedThisFrame = true;
+        }
+        key7WasPressed = current7State;
+    }
 }

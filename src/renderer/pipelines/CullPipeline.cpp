@@ -24,7 +24,7 @@ void CullPipeline::createPipeline() {
     VkDevice device = context.getDevice();
 
     // 1. Create Descriptor Set Layout
-    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
     
     // Binding 0: Input Commands (SSBO)
     bindings[0].binding = 0;
@@ -86,21 +86,21 @@ void CullPipeline::createPipeline() {
     bindings[8].binding = 8;
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[8].descriptorCount = 1;
-    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[8].pImmutableSamplers = nullptr;
 
     // Binding 9: Nanite Index Buffer (SSBO)
     bindings[9].binding = 9;
     bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[9].descriptorCount = 1;
-    bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[9].pImmutableSamplers = nullptr;
 
-    // Binding 10: Visibility Buffer image sampler
+    // Binding 10: Visibility Buffer SSBO (uint64_t array)
     bindings[10].binding = 10;
-    bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[10].descriptorCount = 1;
-    bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[10].pImmutableSamplers = nullptr;
 
     // Binding 11: Traditional Index Buffer (SSBO)
@@ -109,6 +109,20 @@ void CullPipeline::createPipeline() {
     bindings[11].descriptorCount = 1;
     bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[11].pImmutableSamplers = nullptr;
+
+    // Binding 12: Software Output Commands (SSBO)
+    bindings[12].binding = 12;
+    bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[12].descriptorCount = 1;
+    bindings[12].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[12].pImmutableSamplers = nullptr;
+
+    // Binding 13: Software Draw Count (SSBO)
+    bindings[13].binding = 13;
+    bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[13].descriptorCount = 1;
+    bindings[13].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[13].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

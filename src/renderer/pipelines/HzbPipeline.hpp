@@ -24,7 +24,10 @@ public:
 
     void recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel);
 
-    void updateDescriptorSets(const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews);
+    void updateDescriptorSets(
+        VkBuffer visBufferSSBO,
+        const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews
+    );
 
 private:
     void createPipeline();

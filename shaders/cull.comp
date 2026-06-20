@@ -65,6 +65,16 @@ layout(std430, set = 0, binding = 7) readonly buffer CullTasks {
     CullTask tasks[];
 };
 
+layout(std430, set = 0, binding = 12) writeonly buffer SoftwareOutputCommands {
+    VkDrawIndexedIndirectCommand softwareOutputs[];
+};
+
+layout(std430, set = 0, binding = 13) buffer SoftwareDrawCount {
+    uint softwareCount;
+    uint softwareCountY;
+    uint softwareCountZ;
+};
+
 // Push Constants
 layout(push_constant) uniform CullPushConstants {
     mat4 viewProj;
@@ -80,6 +90,10 @@ layout(push_constant) uniform CullPushConstants {
     float lodThreshold;
     float viewportHeight;
     uint lodEnabled;
+    uint rasterizerMode; // 0 = HW, 1 = SW, 2 = HYBRID
+    float sizeThreshold;
+    float pad0;
+    float pad1;
 } pcs;
 
 void main() {
@@ -267,20 +281,41 @@ void main() {
             }
         }
     }
-    
-    // Write culling status feedback for bounds visualizer
-    visibilities[gID] = visibilityStatus;
-    
-    // If visible, write to output buffer
+    // If visible, classify and route
     if (visible) {
-        // Increment atomic counter to get output index
-        uint outIndex = atomicAdd(count, 1);
-        
-        // Copy the command structure, set instanceCount to 1, and pack index
+        // Project bounding sphere to screen space to calculate screen area
+        float d_world_min = max(0.001, (length(worldCenter - pcs.cameraPos) - worldRadius));
+        float screenRadius = (worldRadius * abs(pcs.hzbParams.y) * pcs.viewportHeight) / (2.0 * d_world_min);
+        float screenArea = 3.1415926535 * screenRadius * screenRadius;
+
+        bool useSoftware = false;
+        if (pcs.rasterizerMode == 1) { // PURE_SOFTWARE
+            useSoftware = true;
+        } else if (pcs.rasterizerMode == 2) { // HYBRID
+            if (screenArea < pcs.sizeThreshold) {
+                useSoftware = true;
+            }
+        }
+
         VkDrawIndexedIndirectCommand cmd = inputs[boundsIdx];
         cmd.instanceCount = 1;
         cmd.firstInstance = (instIdx << 16) | clustIdx;
-        
-        outputs[outIndex] = cmd;
+
+        if (useSoftware) {
+            // Write culling status feedback for bounds visualizer (6 = Software Rasterized)
+            visibilities[gID] = 6;
+            
+            uint outIndex = atomicAdd(softwareCount, 1);
+            softwareOutputs[outIndex] = cmd;
+        } else {
+            // Write culling status feedback for bounds visualizer (1 = HW Rasterized / Visible)
+            visibilities[gID] = 1;
+            
+            uint outIndex = atomicAdd(count, 1);
+            outputs[outIndex] = cmd;
+        }
+    } else {
+        // Write culling status feedback for bounds visualizer
+        visibilities[gID] = visibilityStatus;
     }
 }

@@ -19,19 +19,22 @@ layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     uint isNaniteMode;
+    float viewportWidth;
+    float viewportHeight;
 } pcs;
 
-layout(location = 0) flat out uint outMeshletID;
+layout(location = 0) flat out uint outVisPayload;
 
 void main() {
     uint instIdx;
+    uint clustIdx;
     if (pcs.isNaniteMode == 1) {
-        uint packedVal = gl_InstanceIndex;
-        instIdx = packedVal >> 16;
-        outMeshletID = gl_InstanceIndex;
+        instIdx = gl_InstanceIndex >> 16;
+        clustIdx = gl_InstanceIndex & 0xFFFFu;
+        outVisPayload = (instIdx << 22) | (clustIdx << 8);
     } else {
         instIdx = gl_InstanceIndex;
-        outMeshletID = gl_InstanceIndex << 16;
+        outVisPayload = (instIdx << 20);
     }
     
     InstanceData inst = instances[instIdx];

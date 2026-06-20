@@ -27,8 +27,8 @@ VulkanRenderer::VulkanRenderer(
 
     // Instantiate modular passes
     cullPass = std::make_unique<CullComputePass>(context, cullPipeline);
-    hzbPass = std::make_unique<HzbDownsamplePass>(context, hzbPipeline);
-    visBufferPass = std::make_unique<VisBufferPass>(context, *visBufferPipeline);
+    visBufferPass = std::make_unique<VisBufferPass>(context, *visBufferPipeline, cullPipeline.getDescriptorSetLayout());
+    hzbPass = std::make_unique<HzbDownsamplePass>(context, hzbPipeline, *visBufferPass);
     resolvePass = std::make_unique<ResolvePass>(context, *resolvePipeline, *visBufferPass);
     forwardPass = std::make_unique<ForwardPass>(context, pipeline);
     debugOverlayPass = std::make_unique<DebugOverlayPass>(context, *boundsPipeline, debugPipeline, *hzbPass);
@@ -305,10 +305,6 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     }
 }
 
-VkImageView VulkanRenderer::getVisBufferImageView() const {
-    return visBufferPass->getVisBufferImageView();
-}
-
-VkSampler VulkanRenderer::getVisBufferSampler() const {
-    return visBufferPass->getVisBufferSampler();
+VkBuffer VulkanRenderer::getVisBufferSSBO() const {
+    return visBufferPass->getVisBufferSSBO();
 }

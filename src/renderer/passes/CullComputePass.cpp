@@ -64,25 +64,40 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     cullPcs.viewportHeight = static_cast<float>(context.getSwapChainExtent().height);
     cullPcs.lodEnabled = engine.lodEnabled ? 1 : 0;
     cullPcs.maxDrawCount = engine.gpuScene.totalCullTasks;
+    cullPcs.rasterizerMode = static_cast<uint32_t>(engine.rasterizerMode);
+    cullPcs.sizeThreshold = 64.0f; // 64 pixels area
+    cullPcs.pad0 = 0.0f;
+    cullPcs.pad1 = 0.0f;
 
-    // Reset draw count atomic buffer
+    // Reset draw count atomic buffer and software draw count atomic buffer
     vkCmdFillBuffer(cb, engine.gpuScene.drawCountBuffer[currentFrame], 0, sizeof(uint32_t), 0);
+    vkCmdFillBuffer(cb, engine.gpuScene.softwareDrawCountBuffer[currentFrame], 0, sizeof(uint32_t), 0);
 
     // Barrier: Wait for dynamic fill buffer to complete before compute shader writes
-    VkBufferMemoryBarrier2 fillBarrier{};
-    fillBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    fillBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    fillBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    fillBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    fillBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-    fillBarrier.buffer = engine.gpuScene.drawCountBuffer[currentFrame];
-    fillBarrier.offset = 0;
-    fillBarrier.size = sizeof(uint32_t);
+    VkBufferMemoryBarrier2 fillBarriers[2]{};
+    
+    fillBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    fillBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    fillBarriers[0].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    fillBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    fillBarriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+    fillBarriers[0].buffer = engine.gpuScene.drawCountBuffer[currentFrame];
+    fillBarriers[0].offset = 0;
+    fillBarriers[0].size = sizeof(uint32_t);
+
+    fillBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    fillBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    fillBarriers[1].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    fillBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    fillBarriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+    fillBarriers[1].buffer = engine.gpuScene.softwareDrawCountBuffer[currentFrame];
+    fillBarriers[1].offset = 0;
+    fillBarriers[1].size = sizeof(uint32_t);
 
     VkDependencyInfo fillDependency{};
     fillDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    fillDependency.bufferMemoryBarrierCount = 1;
-    fillDependency.pBufferMemoryBarriers = &fillBarrier;
+    fillDependency.bufferMemoryBarrierCount = 2;
+    fillDependency.pBufferMemoryBarriers = fillBarriers;
 
     vkCmdPipelineBarrier2(cb, &fillDependency);
 
@@ -105,9 +120,10 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     uint32_t groupCount = (engine.gpuScene.totalCullTasks + 63) / 64;
     vkCmdDispatch(cb, groupCount, 1, 1);
 
-    // Synchronization Barrier: Wait for compute writes to finish before graphics draws
-    VkBufferMemoryBarrier2 syncBarriers[2]{};
+    // Synchronization Barrier: Wait for compute writes to finish before graphics draws / compute rasterizer reads
+    VkBufferMemoryBarrier2 syncBarriers[4]{};
     
+    // 1. Hardware Indirect Commands
     syncBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
     syncBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     syncBarriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -117,6 +133,7 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     syncBarriers[0].offset = 0;
     syncBarriers[0].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
 
+    // 2. Hardware Draw Count
     syncBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
     syncBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     syncBarriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -126,9 +143,29 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     syncBarriers[1].offset = 0;
     syncBarriers[1].size = sizeof(uint32_t);
 
+    // 3. Software Indirect Commands (read as SSBO in software rasterizer compute shader)
+    syncBarriers[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    syncBarriers[2].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    syncBarriers[2].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    syncBarriers[2].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    syncBarriers[2].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    syncBarriers[2].buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
+    syncBarriers[2].offset = 0;
+    syncBarriers[2].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
+
+    // 4. Software Draw Count (read as indirect dispatch parameters in software rasterizer)
+    syncBarriers[3].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    syncBarriers[3].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    syncBarriers[3].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    syncBarriers[3].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    syncBarriers[3].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    syncBarriers[3].buffer = engine.gpuScene.softwareDrawCountBuffer[currentFrame];
+    syncBarriers[3].offset = 0;
+    syncBarriers[3].size = sizeof(uint32_t) * 3; // sizeof(VkDispatchIndirectCommand)
+
     VkDependencyInfo drawDependency{};
     drawDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    drawDependency.bufferMemoryBarrierCount = 2;
+    drawDependency.bufferMemoryBarrierCount = 4;
     drawDependency.pBufferMemoryBarriers = syncBarriers;
 
     vkCmdPipelineBarrier2(cb, &drawDependency);

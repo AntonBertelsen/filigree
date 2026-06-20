@@ -116,8 +116,10 @@ set(SHADER_SPV_OUTPUTS
     "${CMAKE_BINARY_DIR}/bin/shaders/bounds_frag.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_frag.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/resolve_vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/rasterize.spv"
 )
 
 # Create output shader directory in the build folder
@@ -200,7 +202,15 @@ add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_frag.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag"
-    COMMENT "Compiling VisBuffer fragment shader to SPIR-V..."
+    COMMENT "Compiling VisBuffer fragment shader (no early-Z) to SPIR-V..."
+)
+
+# Custom command to compile visbuffer fragment shader with early-Z
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag" -DEARLY_Z=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag"
+    COMMENT "Compiling VisBuffer fragment shader (with early-Z) to SPIR-V..."
 )
 
 # Custom command to compile resolve vertex shader
@@ -217,6 +227,14 @@ add_custom_command(
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag" -o "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag"
     COMMENT "Compiling Resolve fragment shader to SPIR-V..."
+)
+
+# Custom command to compile software rasterizer compute shader
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/rasterize.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp" -o "${CMAKE_BINARY_DIR}/bin/shaders/rasterize.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp"
+    COMMENT "Compiling Software Rasterizer compute shader to SPIR-V..."
 )
 
 # Create a target for shaders that our main executable depends on

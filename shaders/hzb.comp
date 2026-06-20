@@ -1,13 +1,18 @@
 #version 450
+#extension GL_EXT_shader_atomic_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform HZBPushConstants {
     ivec2 srcSize;
-    int srcLevel; // -1 means read from depth texture, >=0 means read from HZB texture
+    int srcLevel; // -1 means read from depth texture (now VisBuffer SSBO), >=0 means read from HZB texture
 } pcs;
 
 // Input bindings
-layout(set = 0, binding = 0) uniform sampler2D inDepthTex;
+layout(std430, set = 0, binding = 0) readonly buffer VisBuffer {
+    uint64_t visBuffer[];
+};
 layout(set = 0, binding = 1, r32f) readonly uniform image2D inHzbImg;
 
 // Output binding
@@ -37,7 +42,13 @@ void main() {
         
         for (int y = sMin.y; y < sMax.y; ++y) {
             for (int x = sMin.x; x < sMax.x; ++x) {
-                float d = texelFetch(inDepthTex, ivec2(x, y), 0).r;
+                uint pixelIndex = uint(y) * uint(pcs.srcSize.x) + uint(x);
+                uint64_t val = visBuffer[pixelIndex];
+                float d = 1.0;
+                if (val != 0xFFFFFFFFFFFFFFFFul) {
+                    uint depthInt = uint(val >> 32);
+                    d = float(depthInt) / 4294967295.0;
+                }
                 maxDepth = max(maxDepth, d);
             }
         }

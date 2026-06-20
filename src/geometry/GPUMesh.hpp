@@ -42,6 +42,12 @@ struct GPUScene {
     
     VkBuffer drawCountBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     VmaAllocation drawCountAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+
+    VkBuffer culledSoftwareIndirectBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VmaAllocation culledSoftwareIndirectAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    
+    VkBuffer softwareDrawCountBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VmaAllocation softwareDrawCountAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     
     VkBuffer visibilityBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     VmaAllocation visibilityAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };

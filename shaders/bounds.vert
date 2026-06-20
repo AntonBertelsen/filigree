@@ -102,6 +102,7 @@ void main() {
     // 3 = Backface Culled (Blue)
     // 4 = HZB Occlusion Culled (Red)
     // 5 = LOD Culled (Purple)
+    // 6 = Software Rasterized (Cyan)
     if (visible == 1) {
         outColor = vec3(0.0, 1.0, 0.0);       // Green
     } else if (visible == 2) {
@@ -112,6 +113,8 @@ void main() {
         outColor = vec3(1.0, 0.0, 0.0);       // Red
     } else if (visible == 5) {
         outColor = vec3(0.6, 0.1, 0.8);       // Purple (LOD Culled)
+    } else if (visible == 6) {
+        outColor = vec3(0.0, 1.0, 1.0);       // Cyan
     } else {
         outColor = vec3(0.5, 0.5, 0.5);       // Grey fallback
     }

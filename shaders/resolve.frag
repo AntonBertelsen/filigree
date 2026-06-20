@@ -1,10 +1,14 @@
 #version 450
+#extension GL_EXT_shader_atomic_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 // Bindings
-layout(set = 0, binding = 10) uniform usampler2D visBuffer;
+layout(std430, set = 0, binding = 10) readonly buffer VisBuffer {
+    uint64_t visBuffer[];
+};
 
 struct MeshVertex {
     float px, py, pz;
@@ -71,28 +75,31 @@ uint getIndex(uint indexOffset) {
 
 void main() {
     // 1. Read VisBuffer value at current pixel coordinate
-    ivec2 texCoord = ivec2(gl_FragCoord.xy);
-    uvec4 visData = texelFetch(visBuffer, texCoord, 0);
+    uint pixelIndex = uint(gl_FragCoord.y) * uint(pcs.viewportSize.x) + uint(gl_FragCoord.x);
+    uint64_t packedVal64 = visBuffer[pixelIndex];
     
-    // Check if background (clear value 0xFFFFFFFF)
-    if (visData.x == 0xFFFFFFFFu) {
+    // Check if background (clear value 0xFFFFFFFFFFFFFFFF)
+    if (packedVal64 == 0xFFFFFFFFFFFFFFFFul) {
         outColor = vec4(0.15, 0.15, 0.18, 1.0); // Nice dark grey background
         return;
     }
     
+    // Unpack payload from low 32 bits of packedVal64
+    uint payload = uint(packedVal64 & 0xFFFFFFFFu);
+    
     uint instIdx;
     uint meshletID;
+    uint triangleID;
     
-    uint packedVal = visData.x;
     if (pcs.isNaniteMode == 1) {
-        meshletID = packedVal & 0xFFFFu;
-        instIdx = packedVal >> 16;
+        instIdx = payload >> 22;
+        meshletID = (payload >> 8) & 0x3FFFu;
+        triangleID = payload & 0xFFu;
     } else {
+        instIdx = payload >> 20;
         meshletID = 0;
-        instIdx = packedVal >> 16;
+        triangleID = payload & 0xFFFFFu;
     }
-    
-    uint triangleID = visData.y;
     
     InstanceData inst = instances[instIdx];
     mat4 modelMatrix = inst.modelMatrix;

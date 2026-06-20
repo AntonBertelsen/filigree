@@ -42,7 +42,6 @@ public:
         GPUScene& scene,
         VkImageView hzbImageView0,
         VkImageView hzbImageView1,
-        VkImageView visBufferImageView,
-        VkSampler visBufferSampler
+        VkBuffer visBufferSSBO
     );
 };

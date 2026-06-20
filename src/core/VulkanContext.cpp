@@ -259,6 +259,8 @@ void VulkanContext::createLogicalDevice() {
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.multiDrawIndirect = VK_TRUE;
     deviceFeatures.geometryShader = VK_TRUE;
+    deviceFeatures.shaderInt64 = VK_TRUE;
+    deviceFeatures.fragmentStoresAndAtomics = VK_TRUE;
 
     VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
     dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
@@ -267,6 +269,7 @@ void VulkanContext::createLogicalDevice() {
     VkPhysicalDeviceVulkan12Features vulkan12Features{};
     vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vulkan12Features.drawIndirectCount = VK_TRUE;
+    vulkan12Features.shaderBufferInt64Atomics = VK_TRUE;
     vulkan12Features.pNext = &dynamicRenderingFeatures;
 
     VkPhysicalDeviceSynchronization2Features synchronization2Features{};
@@ -305,7 +308,22 @@ bool VulkanContext::isDeviceSuitable(VkPhysicalDevice dev) {
         swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
     }
 
-    return indices.isComplete() && extensionsSupported && swapChainAdequate;
+    // Check for 64-bit integer and atomic features
+    VkPhysicalDeviceFeatures supportedFeatures;
+    vkGetPhysicalDeviceFeatures(dev, &supportedFeatures);
+
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &features12;
+    vkGetPhysicalDeviceFeatures2(dev, &features2);
+
+    bool featuresSupported = (supportedFeatures.shaderInt64 == VK_TRUE) &&
+                             (supportedFeatures.fragmentStoresAndAtomics == VK_TRUE) &&
+                             (features12.shaderBufferInt64Atomics == VK_TRUE);
+
+    return indices.isComplete() && extensionsSupported && swapChainAdequate && featuresSupported;
 }
 
 bool VulkanContext::checkDeviceExtensionSupport(VkPhysicalDevice dev) {

@@ -36,6 +36,22 @@ public:
         DEFERRED
     };
 
+    enum class RasterizerMode {
+        PURE_HARDWARE = 0,
+        PURE_SOFTWARE = 1,
+        HYBRID = 2
+    };
+
+    enum class HardwarePathMode {
+        PURE_UAV = 0,
+        DEPTH_TESTED = 1
+    };
+
+    enum class SyncMode {
+        SEQUENTIAL = 0,
+        PARALLEL = 1
+    };
+
     Engine();
     ~Engine();
 
@@ -102,6 +118,9 @@ private:
     // Toggles and debug configurations
     GeometryPipeline geometryPipeline = GeometryPipeline::NANITE;
     ShadingPath shadingPath = ShadingPath::DEFERRED;
+    RasterizerMode rasterizerMode = RasterizerMode::HYBRID;
+    HardwarePathMode hwPathMode = HardwarePathMode::DEPTH_TESTED;
+    SyncMode syncMode = SyncMode::SEQUENTIAL;
     bool hzbCullingEnabled = true;
     bool debugVisualiseHzb = false;
     uint32_t debugHzbMipLevel = 0;

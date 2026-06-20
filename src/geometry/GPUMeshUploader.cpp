@@ -225,11 +225,19 @@ void GPUMeshUploader::uploadSceneInstances(
         updateBufferData(scene.cullTasksBuffer[i], scene.cullTasksAllocation[i], cullTasksBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, cullTasks.data(), VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
         updateBufferData(scene.traditionalIndirectBuffer[i], scene.traditionalIndirectAllocation[i], tradIndirectBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, traditionalCommands.data(), VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
         resizeDeviceBuffer(scene.culledIndirectBuffer[i], scene.culledIndirectAllocation[i], indirectBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        resizeDeviceBuffer(scene.culledSoftwareIndirectBuffer[i], scene.culledSoftwareIndirectAllocation[i], indirectBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         
         // drawCountBuffer: Alloc size is sizeof(uint32_t), so we can just update it
         uint32_t zero = 0;
         updateBufferData(scene.drawCountBuffer[i], scene.drawCountAllocation[i], sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &zero, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
         
+        struct SoftwareDrawCountInit {
+            uint32_t x = 0;
+            uint32_t y = 1;
+            uint32_t z = 1;
+        } swInit;
+        updateBufferData(scene.softwareDrawCountBuffer[i], scene.softwareDrawCountAllocation[i], sizeof(SoftwareDrawCountInit), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &swInit, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+
         resizeDeviceBuffer(scene.visibilityBuffer[i], scene.visibilityAllocation[i], visibilityBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     }
 }
@@ -239,8 +247,7 @@ void GPUMeshUploader::updateDescriptorSets(
     GPUScene& scene,
     VkImageView hzbImageView0,
     VkImageView hzbImageView1,
-    VkImageView visBufferImageView,
-    VkSampler visBufferSampler
+    VkBuffer visBufferSSBO
 ) {
     VkDevice device = context.getDevice();
 
@@ -297,17 +304,27 @@ void GPUMeshUploader::updateDescriptorSets(
         indexInfo.offset = 0;
         indexInfo.range = VK_WHOLE_SIZE;
 
-        VkDescriptorImageInfo visBufferImageInfo{};
-        visBufferImageInfo.sampler = visBufferSampler;
-        visBufferImageInfo.imageView = visBufferImageView;
-        visBufferImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorBufferInfo visBufferInfo{};
+        visBufferInfo.buffer = visBufferSSBO != VK_NULL_HANDLE ? visBufferSSBO : scene.inputCommandsBuffer;
+        visBufferInfo.offset = 0;
+        visBufferInfo.range = VK_WHOLE_SIZE;
 
         VkDescriptorBufferInfo traditionalIndexInfo{};
         traditionalIndexInfo.buffer = scene.traditionalIndexBuffer;
         traditionalIndexInfo.offset = 0;
         traditionalIndexInfo.range = VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 12> writes{};
+        VkDescriptorBufferInfo softwareIndirectInfo{};
+        softwareIndirectInfo.buffer = scene.culledSoftwareIndirectBuffer[i] != VK_NULL_HANDLE ? scene.culledSoftwareIndirectBuffer[i] : scene.inputCommandsBuffer;
+        softwareIndirectInfo.offset = 0;
+        softwareIndirectInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo softwareDrawCountInfo{};
+        softwareDrawCountInfo.buffer = scene.softwareDrawCountBuffer[i] != VK_NULL_HANDLE ? scene.softwareDrawCountBuffer[i] : scene.inputCommandsBuffer;
+        softwareDrawCountInfo.offset = 0;
+        softwareDrawCountInfo.range = VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 14> writes{};
         
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = scene.globalDescriptorSets[i];
@@ -382,9 +399,9 @@ void GPUMeshUploader::updateDescriptorSets(
         writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[10].dstSet = scene.globalDescriptorSets[i];
         writes[10].dstBinding = 10;
-        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[10].descriptorCount = 1;
-        writes[10].pImageInfo = &visBufferImageInfo;
+        writes[10].pBufferInfo = &visBufferInfo;
 
         writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[11].dstSet = scene.globalDescriptorSets[i];
@@ -392,6 +409,20 @@ void GPUMeshUploader::updateDescriptorSets(
         writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[11].descriptorCount = 1;
         writes[11].pBufferInfo = &traditionalIndexInfo;
+
+        writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[12].dstSet = scene.globalDescriptorSets[i];
+        writes[12].dstBinding = 12;
+        writes[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[12].descriptorCount = 1;
+        writes[12].pBufferInfo = &softwareIndirectInfo;
+
+        writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[13].dstSet = scene.globalDescriptorSets[i];
+        writes[13].dstBinding = 13;
+        writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[13].descriptorCount = 1;
+        writes[13].pBufferInfo = &softwareDrawCountInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }

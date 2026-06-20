@@ -23,6 +23,9 @@ public:
     bool is2PressedThisFrame() const { return key2PressedThisFrame; }
     bool is3PressedThisFrame() const { return key3PressedThisFrame; }
     bool is4PressedThisFrame() const { return key4PressedThisFrame; }
+    bool is5PressedThisFrame() const { return key5PressedThisFrame; }
+    bool is6PressedThisFrame() const { return key6PressedThisFrame; }
+    bool is7PressedThisFrame() const { return key7PressedThisFrame; }
 
 private:
     GLFWwindow* window = nullptr;
@@ -66,4 +69,13 @@ private:
 
     bool key4WasPressed = false;
     bool key4PressedThisFrame = false;
+
+    bool key5WasPressed = false;
+    bool key5PressedThisFrame = false;
+
+    bool key6WasPressed = false;
+    bool key6PressedThisFrame = false;
+
+    bool key7WasPressed = false;
+    bool key7PressedThisFrame = false;
 };

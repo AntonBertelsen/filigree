@@ -171,6 +171,24 @@ void Engine::mainLoop() {
             std::cout << "[Shading Switch] Shading path changed to: " << (shadingPath == ShadingPath::DEFERRED ? "DEFERRED" : "FORWARD") << std::endl;
         }
 
+        if (inputController->is5PressedThisFrame()) {
+            rasterizerMode = static_cast<RasterizerMode>((static_cast<int>(rasterizerMode) + 1) % 3);
+            std::vector<std::string> modes = { "PURE_HARDWARE", "PURE_SOFTWARE", "HYBRID" };
+            std::cout << "[Rasterizer Mode] Mode changed to: " << modes[static_cast<int>(rasterizerMode)] << std::endl;
+        }
+
+        if (inputController->is6PressedThisFrame()) {
+            hwPathMode = static_cast<HardwarePathMode>((static_cast<int>(hwPathMode) + 1) % 2);
+            std::vector<std::string> hwModes = { "PURE_UAV", "DEPTH_TESTED" };
+            std::cout << "[Hardware Path] Mode changed to: " << hwModes[static_cast<int>(hwPathMode)] << std::endl;
+        }
+
+        if (inputController->is7PressedThisFrame()) {
+            syncMode = static_cast<SyncMode>((static_cast<int>(syncMode) + 1) % 2);
+            std::vector<std::string> syncModes = { "SEQUENTIAL", "PARALLEL" };
+            std::cout << "[Pipeline Sync] Mode changed to: " << syncModes[static_cast<int>(syncMode)] << std::endl;
+        }
+
         if (inputController->isLPressedThisFrame()) {
             lodEnabled = !lodEnabled;
             std::cout << "[LOD Selection] LOD system: " << (lodEnabled ? "ENABLED" : "DISABLED") << std::endl;
@@ -242,27 +260,41 @@ void Engine::mainLoop() {
             telemetryFrameCount = 0;
             if (activeModelIndex < 4) {
                 uint32_t totalDrawCount = 0;
+                uint32_t totalSoftwareDrawCount = 0;
                 uint32_t totalClusterCount = 0;
                 uint32_t currentFrame = context->getCurrentFrameIndex();
                 bool isNanite = (geometryPipeline == GeometryPipeline::NANITE);
 
                 totalClusterCount = gpuScene.totalCullTasks;
                 if (isNanite) {
-                    uint32_t drawCount = 0;
                     if (gpuScene.drawCountBuffer[currentFrame] != VK_NULL_HANDLE) {
                         void* mappedData = nullptr;
                         vmaMapMemory(context->getAllocator(), gpuScene.drawCountAllocation[currentFrame], &mappedData);
-                        drawCount = *static_cast<uint32_t*>(mappedData);
+                        totalDrawCount = *static_cast<uint32_t*>(mappedData);
                         vmaUnmapMemory(context->getAllocator(), gpuScene.drawCountAllocation[currentFrame]);
                     }
-                    totalDrawCount = drawCount;
+                    if (gpuScene.softwareDrawCountBuffer[currentFrame] != VK_NULL_HANDLE) {
+                        void* mappedData = nullptr;
+                        vmaMapMemory(context->getAllocator(), gpuScene.softwareDrawCountAllocation[currentFrame], &mappedData);
+                        totalSoftwareDrawCount = *static_cast<uint32_t*>(mappedData);
+                        vmaUnmapMemory(context->getAllocator(), gpuScene.softwareDrawCountAllocation[currentFrame]);
+                    }
                 }
+
+                std::vector<std::string> rasterModes = { "PURE_HARDWARE", "PURE_SOFTWARE", "HYBRID" };
+                std::string modeStr = isNanite ? rasterModes[static_cast<int>(rasterizerMode)] : "TRADITIONAL";
+
+                std::vector<std::string> hwModes = { "PURE_UAV", "DEPTH_TESTED" };
+                std::vector<std::string> syncModes = { "SEQUENTIAL", "PARALLEL" };
 
                 std::string modelName = (activeModelIndex < 3) ? models[activeModelIndex].name : "Scattered Forest";
                 std::cout << "[Telemetry] Geometry: " << (isNanite ? "NANITE" : "TRADITIONAL")
-                          << " | Shading: " << (shadingPath == ShadingPath::DEFERRED ? "DEFERRED" : "FORWARD")
+                          << " | Mode: " << modeStr
+                          << " (HW: " << (isNanite ? hwModes[static_cast<int>(hwPathMode)] : "N/A")
+                          << ", Sync: " << (isNanite ? syncModes[static_cast<int>(syncMode)] : "N/A") << ")"
                           << " | Model: " << modelName
-                          << " | Clusters Drawn: " << (isNanite ? std::to_string(totalDrawCount) : "N/A (All)")
+                          << " | HW Clusters: " << (isNanite ? std::to_string(totalDrawCount) : "N/A")
+                          << " | SW Clusters: " << (isNanite ? std::to_string(totalSoftwareDrawCount) : "N/A")
                           << " / " << totalClusterCount
                           << " | LOD: " << (lodEnabled ? "ON (" + std::to_string(lodThreshold) + "px)" : "OFF")
                           << " | HZB Culling: " << (hzbCullingEnabled ? "ON" : "OFF")
@@ -324,6 +356,12 @@ void Engine::cleanup() {
             if (gpuScene.drawCountBuffer[i] != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, gpuScene.drawCountBuffer[i], gpuScene.drawCountAllocation[i]);
             }
+            if (gpuScene.culledSoftwareIndirectBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.culledSoftwareIndirectBuffer[i], gpuScene.culledSoftwareIndirectAllocation[i]);
+            }
+            if (gpuScene.softwareDrawCountBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.softwareDrawCountBuffer[i], gpuScene.softwareDrawCountAllocation[i]);
+            }
             if (gpuScene.visibilityBuffer[i] != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, gpuScene.visibilityBuffer[i], gpuScene.visibilityAllocation[i]);
             }
@@ -370,6 +408,9 @@ void Engine::recreateSwapChain() {
     context->recreateSwapChain();
 
     if (renderer) {
+        renderer->recreateVisBuffer();
+    }
+    if (renderer) {
         renderer->updateHzbDescriptorSets();
     }
     if (debugPipeline && renderer) {
@@ -377,10 +418,6 @@ void Engine::recreateSwapChain() {
             renderer->getHzbImageView(0),
             renderer->getHzbImageView(1)
         );
-    }
-
-    if (renderer) {
-        renderer->recreateVisBuffer();
     }
 
     // Recreate/update descriptor sets with the new visBuffer image view
@@ -479,7 +516,6 @@ void Engine::updateSceneInstances() {
         gpuScene,
         renderer->getHzbImageView(0),
         renderer->getHzbImageView(1),
-        renderer->getVisBufferImageView(),
-        renderer->getVisBufferSampler()
+        renderer->getVisBufferSSBO()
     );
 }

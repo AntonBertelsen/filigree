@@ -2,9 +2,11 @@
 #include "renderer/passes/IRenderPass.hpp"
 #include "renderer/pipelines/HzbPipeline.hpp"
 
+class VisBufferPass; // Forward declaration
+
 class HzbDownsamplePass : public IRenderPass {
 public:
-    HzbDownsamplePass(VulkanContext& context, HzbPipeline& hzbPipeline);
+    HzbDownsamplePass(VulkanContext& context, HzbPipeline& hzbPipeline, VisBufferPass& visBufferPass);
     ~HzbDownsamplePass() override;
 
     void record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t imageIndex, Engine& engine) override;
@@ -20,6 +22,7 @@ private:
 
     VulkanContext& context;
     HzbPipeline& hzbPipeline;
+    VisBufferPass& visBufferPass;
 
     // HZB handles (double buffered)
     VkImage hzbImages[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };

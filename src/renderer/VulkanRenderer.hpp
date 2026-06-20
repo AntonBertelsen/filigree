@@ -39,8 +39,7 @@ public:
     void updateHzbDescriptorSets();
 
     VkImageView getHzbImageView(uint32_t frameIndex) const;
-    VkImageView getVisBufferImageView() const;
-    VkSampler getVisBufferSampler() const;
+    VkBuffer getVisBufferSSBO() const;
 
 private:
     VulkanContext& context;

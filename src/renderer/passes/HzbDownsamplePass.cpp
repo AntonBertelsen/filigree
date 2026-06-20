@@ -1,10 +1,11 @@
 #include "HzbDownsamplePass.hpp"
 #include "core/Engine.hpp"
+#include "VisBufferPass.hpp"
 #include <stdexcept>
 #include <algorithm>
 
-HzbDownsamplePass::HzbDownsamplePass(VulkanContext& context, HzbPipeline& hzbPipeline)
-    : context(context), hzbPipeline(hzbPipeline) {
+HzbDownsamplePass::HzbDownsamplePass(VulkanContext& context, HzbPipeline& hzbPipeline, VisBufferPass& visBufferPass)
+    : context(context), hzbPipeline(hzbPipeline), visBufferPass(visBufferPass) {
     createHzbResources();
     updateDescriptorSets();
 }
@@ -269,5 +270,5 @@ void HzbDownsamplePass::updateDescriptorSets() {
             levelViews[f][l] = hzbLevelImageViews[f][l];
         }
     }
-    hzbPipeline.updateDescriptorSets(levelViews);
+    hzbPipeline.updateDescriptorSets(visBufferPass.getVisBufferSSBO(), levelViews);
 }

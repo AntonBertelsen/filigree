@@ -39,9 +39,9 @@ void HzbPipeline::createPipeline() {
     // 1. Create Descriptor Set Layout
     std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     
-    // Binding 0: Input Depth Texture (Sampled Image)
+    // Binding 0: Input VisBuffer SSBO
     bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[0].pImmutableSamplers = nullptr;
@@ -173,15 +173,18 @@ void HzbPipeline::createDescriptorPoolAndSets() {
     }
 }
 
-void HzbPipeline::updateDescriptorSets(const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews) {
+void HzbPipeline::updateDescriptorSets(
+    VkBuffer visBufferSSBO,
+    const std::array<std::array<VkImageView, 11>, 2>& hzbLevelImageViews
+) {
     VkDevice device = context.getDevice();
 
     for (int f = 0; f < 2; f++) {
         for (int l = 0; l < 11; l++) {
-            VkDescriptorImageInfo depthInfo{};
-            depthInfo.sampler = depthSampler;
-            depthInfo.imageView = context.getDepthImageView();
-            depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorBufferInfo visBufferInfo{};
+            visBufferInfo.buffer = visBufferSSBO;
+            visBufferInfo.offset = 0;
+            visBufferInfo.range = VK_WHOLE_SIZE;
 
             // Input HZB view is Level L-1 (or Level 0 if L == 0 as a dummy binding)
             VkDescriptorImageInfo inHzbInfo{};
@@ -195,14 +198,14 @@ void HzbPipeline::updateDescriptorSets(const std::array<std::array<VkImageView, 
 
             std::array<VkWriteDescriptorSet, 3> writes{};
 
-            // Binding 0: Depth texture
+            // Binding 0: VisBuffer SSBO
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet = descriptorSets[f][l];
             writes[0].dstBinding = 0;
             writes[0].dstArrayElement = 0;
-            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[0].descriptorCount = 1;
-            writes[0].pImageInfo = &depthInfo;
+            writes[0].pBufferInfo = &visBufferInfo;
 
             // Binding 1: Input HZB level image
             writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
