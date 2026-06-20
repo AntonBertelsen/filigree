@@ -57,4 +57,7 @@ private:
     std::unique_ptr<ResolvePass> resolvePass;
     std::unique_ptr<ForwardPass> forwardPass;
     std::unique_ptr<DebugOverlayPass> debugOverlayPass;
+
+    void initImGui();
+    void cleanupImGui();
 };

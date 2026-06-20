@@ -17,6 +17,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 
 # 3. Collect source files
@@ -27,6 +28,8 @@ set(SOURCES
     src/core/VulkanContext.cpp
     src/core/Engine.hpp
     src/core/Engine.cpp
+    src/ui/DebugUI.hpp
+    src/ui/DebugUI.cpp
     src/scene/Node.hpp
     src/scene/Node.cpp
     src/scene/CameraNode.hpp
@@ -91,6 +94,7 @@ target_link_libraries(filigree PRIVATE
     GPUOpen::VulkanMemoryAllocator
     tinyobjloader::tinyobjloader
     meshoptimizer::meshoptimizer
+    imgui::imgui
 )
 
 # Configure output directories to keep the build directory tidy

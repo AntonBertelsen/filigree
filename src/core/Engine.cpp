@@ -1,5 +1,7 @@
 #include "Engine.hpp"
 #include "renderer/VulkanRenderer.hpp"
+#include "ui/DebugUI.hpp"
+
 #include "geometry/ClusterDAGBuilder.hpp"
 #include "geometry/GPUMeshUploader.hpp"
 #include "core/InputController.hpp"
@@ -18,6 +20,7 @@ Engine::Engine() {
     pipeline = std::make_unique<StandardPipeline>(*context, cullPipeline->getDescriptorSetLayout());
     hzbPipeline = std::make_unique<HzbPipeline>(*context);
     debugPipeline = std::make_unique<DebugPipeline>(*context);
+    debugUI = std::make_unique<DebugUI>();
     renderer = std::make_unique<VulkanRenderer>(*context, *pipeline, *cullPipeline, *hzbPipeline, *debugPipeline);
     
     rootNode = std::make_unique<Node>();
@@ -158,8 +161,13 @@ void Engine::mainLoop() {
         float deltaTime = currentFrameTime - lastFrameTime;
         lastFrameTime = currentFrameTime;
 
-        // Poll Input
-        inputController->update(deltaTime);
+        // Update and render Debug UI
+        debugUI->update(*this, deltaTime);
+
+        // Poll Input (passing UI mouse/keyboard capture and benchmark states)
+        bool suspendCamera = debugUI->shouldSuspendCamera() || debugUI->wantCaptureMouse();
+        bool captureKeyboard = debugUI->wantCaptureKeyboard();
+        inputController->update(deltaTime, suspendCamera, captureKeyboard);
         
         if (inputController->isTabPressedThisFrame()) {
             geometryPipeline = (geometryPipeline == GeometryPipeline::NANITE) ? GeometryPipeline::TRADITIONAL : GeometryPipeline::NANITE;
@@ -315,6 +323,11 @@ void Engine::mainLoop() {
 }
 
 void Engine::cleanup() {
+    // Release renderer first (shuts down GLFW/Vulkan bindings)
+    renderer.reset();
+    // Release UI second (destroys ImGui context)
+    debugUI.reset();
+
     // Release scene graph before Vulkan cleanup
     rootNode.reset();
     cameraNode = nullptr;
@@ -519,3 +532,5 @@ void Engine::updateSceneInstances() {
         renderer->getVisBufferSSBO()
     );
 }
+
+

@@ -65,7 +65,7 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     cullPcs.lodEnabled = engine.lodEnabled ? 1 : 0;
     cullPcs.maxDrawCount = engine.gpuScene.totalCullTasks;
     cullPcs.rasterizerMode = static_cast<uint32_t>(engine.rasterizerMode);
-    cullPcs.sizeThreshold = 64.0f; // 64 pixels area
+    cullPcs.sizeThreshold = engine.sizeThreshold;
     cullPcs.pad0 = 0.0f;
     cullPcs.pad1 = 0.0f;
 

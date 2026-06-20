@@ -8,7 +8,7 @@ public:
     InputController(GLFWwindow* window, CameraNode* cameraNode);
     ~InputController() = default;
 
-    void update(float deltaTime);
+    void update(float deltaTime, bool suspendCamera = false, bool wantCaptureKeyboard = false);
 
     bool isTabPressedThisFrame() const { return tabPressedThisFrame; }
     bool isFPressedThisFrame() const { return fPressedThisFrame; }

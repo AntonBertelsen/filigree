@@ -23,6 +23,7 @@ class VisBufferPass;
 class ResolvePass;
 class ForwardPass;
 class DebugOverlayPass;
+class DebugUI;
 
 class Engine {
 public:
@@ -74,6 +75,7 @@ public:
     friend class ResolvePass;
     friend class ForwardPass;
     friend class DebugOverlayPass;
+    friend class DebugUI;
 
 private:
     void initWindow();
@@ -127,6 +129,7 @@ private:
     bool drawBoundingSpheres = false;
     bool lodEnabled = true;
     float lodThreshold = 2.0f; // in pixels
+    float sizeThreshold = 64.0f; // area threshold for software rasterization
     uint32_t visBufferDebugMode = 0; // 0 = Shaded, 1 = Neutral, 2 = Triangle ID, 3 = Barycentrics, 4 = Meshlet ID
 
     // Visual verification of culling (Freeze Frustum)
@@ -138,4 +141,7 @@ private:
     float lastFrameTime = 0.0f;
     bool framebufferResized = false;
     uint32_t telemetryFrameCount = 0;
+
+    // Debug UI controller overlay
+    std::unique_ptr<DebugUI> debugUI;
 };

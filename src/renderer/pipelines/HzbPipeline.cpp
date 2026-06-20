@@ -114,7 +114,7 @@ void HzbPipeline::createDescriptorPoolAndSets() {
 
     // 1. Create Descriptor Pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 22; // 2 frames * 11 levels
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[1].descriptorCount = 44; // 2 frames * 11 levels * 2 storage bindings

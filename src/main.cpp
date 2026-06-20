@@ -2,9 +2,8 @@
 #include <iostream>
 
 int main() {
-    Engine engine;
-
     try {
+        Engine engine;
         engine.run();
     } catch (const std::exception& e) {
         std::cerr << "An error occurred: " << e.what() << std::endl;

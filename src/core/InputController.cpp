@@ -3,9 +3,9 @@
 InputController::InputController(GLFWwindow* window, CameraNode* cameraNode)
     : window(window), cameraNode(cameraNode) {}
 
-void InputController::update(float deltaTime) {
-    // 1. Update camera movement and mouse controls
-    if (cameraNode && window) {
+void InputController::update(float deltaTime, bool suspendCamera, bool wantCaptureKeyboard) {
+    // 1. Update camera movement and mouse controls (only if camera controls are not suspended)
+    if (cameraNode && window && !suspendCamera) {
         cameraNode->update(deltaTime, window);
     }
 
@@ -167,5 +167,25 @@ void InputController::update(float deltaTime) {
             key7PressedThisFrame = true;
         }
         key7WasPressed = current7State;
+    }
+
+    // Clear all hotkey inputs if keyboard focus is captured
+    if (wantCaptureKeyboard) {
+        tabPressedThisFrame = false;
+        fPressedThisFrame = false;
+        mPressedThisFrame = false;
+        hPressedThisFrame = false;
+        vPressedThisFrame = false;
+        upPressedThisFrame = false;
+        downPressedThisFrame = false;
+        bPressedThisFrame = false;
+        lPressedThisFrame = false;
+        key1PressedThisFrame = false;
+        key2PressedThisFrame = false;
+        key3PressedThisFrame = false;
+        key4PressedThisFrame = false;
+        key5PressedThisFrame = false;
+        key6PressedThisFrame = false;
+        key7PressedThisFrame = false;
     }
 }

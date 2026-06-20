@@ -1,5 +1,9 @@
 #include "VulkanRenderer.hpp"
 #include "core/Engine.hpp"
+
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 #include "renderer/pipelines/HzbPipeline.hpp"
 #include "renderer/pipelines/DebugPipeline.hpp"
 #include "renderer/pipelines/VisBufferPipeline.hpp"
@@ -32,9 +36,13 @@ VulkanRenderer::VulkanRenderer(
     resolvePass = std::make_unique<ResolvePass>(context, *resolvePipeline, *visBufferPass);
     forwardPass = std::make_unique<ForwardPass>(context, pipeline);
     debugOverlayPass = std::make_unique<DebugOverlayPass>(context, *boundsPipeline, debugPipeline, *hzbPass);
+
+    initImGui();
 }
 
-VulkanRenderer::~VulkanRenderer() = default;
+VulkanRenderer::~VulkanRenderer() {
+    cleanupImGui();
+}
 
 void VulkanRenderer::recreateVisBuffer() {
     VkExtent2D extent = context.getSwapChainExtent();
@@ -277,6 +285,30 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     // 5. Draw debug visualizers (bounding spheres, HZB mip overlay)
     debugOverlayPass->record(cb, currentFrame, imageIndex, engine);
 
+    // 5.5. Render ImGui UI on top
+    VkRenderingAttachmentInfo imguiColorAttachment{};
+    imguiColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    imguiColorAttachment.imageView = context.getSwapChainImageViews()[imageIndex];
+    imguiColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imguiColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // Load previously rendered frame
+    imguiColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo imguiRenderingInfo{};
+    imguiRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    imguiRenderingInfo.renderArea.offset = {0, 0};
+    imguiRenderingInfo.renderArea.extent = context.getSwapChainExtent();
+    imguiRenderingInfo.layerCount = 1;
+    imguiRenderingInfo.colorAttachmentCount = 1;
+    imguiRenderingInfo.pColorAttachments = &imguiColorAttachment;
+    imguiRenderingInfo.pDepthAttachment = nullptr;
+
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (drawData && drawData->Valid && drawData->CmdListsCount > 0) {
+        vkCmdBeginRendering(cb, &imguiRenderingInfo);
+        ImGui_ImplVulkan_RenderDrawData(drawData, cb);
+        vkCmdEndRendering(cb);
+    }
+
     // 6. Transition swapchain image layout from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
     VkImageMemoryBarrier2 presentBarrier{};
     presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -307,4 +339,45 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
 VkBuffer VulkanRenderer::getVisBufferSSBO() const {
     return visBufferPass->getVisBufferSSBO();
+}
+
+void VulkanRenderer::initImGui() {
+    // 1. Initialize Platform and Renderer Backends
+    ImGui_ImplGlfw_InitForVulkan(context.getWindow(), true);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion = VK_API_VERSION_1_2;
+    initInfo.Instance = context.getInstance();
+    initInfo.PhysicalDevice = context.getPhysicalDevice();
+    initInfo.Device = context.getDevice();
+    initInfo.QueueFamily = context.findQueueFamilies(context.getPhysicalDevice()).graphicsFamily.value();
+    initInfo.Queue = context.getGraphicsQueue();
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.DescriptorPool = VK_NULL_HANDLE; // Let backend allocate its own descriptor pool
+    initInfo.DescriptorPoolSize = 16;
+    initInfo.MinImageCount = static_cast<uint32_t>(context.getSwapChainImages().size());
+    initInfo.ImageCount = static_cast<uint32_t>(context.getSwapChainImages().size());
+    initInfo.UseDynamicRendering = true;
+    
+    // Set dynamic rendering color attachment format info under PipelineInfoMain
+    initInfo.PipelineInfoMain.Subpass = 0;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    
+    static VkFormat colorFormat;
+    colorFormat = context.getSwapChainImageFormat();
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+    
+    initInfo.Allocator = nullptr;
+
+    if (!ImGui_ImplVulkan_Init(&initInfo)) {
+        throw std::runtime_error("Failed to initialize ImGui Vulkan backend!");
+    }
+}
+
+void VulkanRenderer::cleanupImGui() {
+    vkDeviceWaitIdle(context.getDevice());
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
 }

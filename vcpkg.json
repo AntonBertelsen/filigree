@@ -6,6 +6,13 @@
     "glm",
     "vulkan-memory-allocator",
     "tinyobjloader",
-    "meshoptimizer"
+    "meshoptimizer",
+    {
+      "name": "imgui",
+      "features": [
+        "glfw-binding",
+        "vulkan-binding"
+      ]
+    }
   ]
 }
