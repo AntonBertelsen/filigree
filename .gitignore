@@ -12,3 +12,6 @@ obj/
 
 # Local package manager files
 external/vcpkg/
+
+# Dear ImGui layout configuration
+imgui.ini
