@@ -100,11 +100,16 @@ void main() {
     // Cooperatively project up to 64 vertices
     if (localThreadIdx < 64) {
         uint vIdx = uint(vertexOffset) + localThreadIdx;
-        MeshVertex v = vertices[vIdx];
-        vec4 worldPos = modelMatrix * vec4(v.px, v.py, v.pz, 1.0);
-        vec4 clipPos = pcs.viewProj * worldPos;
-        sharedPos[localThreadIdx] = clipPos;
-        sharedScreenPos[localThreadIdx] = (clipPos.xy / clipPos.w * 0.5 + 0.5) * vec2(pcs.viewportWidth, pcs.viewportHeight);
+        if (vIdx < vertices.length()) {
+            MeshVertex v = vertices[vIdx];
+            vec4 worldPos = modelMatrix * vec4(v.px, v.py, v.pz, 1.0);
+            vec4 clipPos = pcs.viewProj * worldPos;
+            sharedPos[localThreadIdx] = clipPos;
+            sharedScreenPos[localThreadIdx] = (clipPos.xy / clipPos.w * 0.5 + 0.5) * vec2(pcs.viewportWidth, pcs.viewportHeight);
+        } else {
+            sharedPos[localThreadIdx] = vec4(0.0);
+            sharedScreenPos[localThreadIdx] = vec2(0.0);
+        }
     }
     
     barrier();
@@ -135,9 +140,9 @@ void main() {
         
         float den = e0.x * e1.y - e1.x * e0.y;
         
-        // Backface culling: under Vulkan's Y-down screen coordinate system,
+        // Backface and degenerate culling: under Vulkan's Y-down screen coordinate system,
         // CCW (front-facing) winding has a negative cross product.
-        if (den >= 0.0) {
+        if (den >= -0.0001) {
             return;
         }
         
@@ -153,28 +158,118 @@ void main() {
         int minY_i = max(0, int(floor(minY)));
         int maxY_i = min(int(pcs.viewportHeight) - 1, int(ceil(maxY)));
         
-        // Loop over pixels inside bounding box
-        for (int y = minY_i; y <= maxY_i; ++y) {
-            for (int x = minX_i; x <= maxX_i; ++x) {
-                vec2 p = vec2(x + 0.5, y + 0.5);
-                vec2 e2 = p - v0;
-                
-                float v = (e2.x * e1.y - e1.x * e2.y) / den;
-                float w = (e0.x * e2.y - e2.x * e0.y) / den;
-                float u = 1.0 - v - w;
-                
-                if (u >= 0.0 && v >= 0.0 && w >= 0.0) {
-                    float z = u * (p0.z / p0.w) + v * (p1.z / p1.w) + w * (p2.z / p2.w);
-                    z = clamp(z, 0.0, 1.0);
-                    
-                    uint depthInt = uint(z * 4294967295.0);
-                    
-                    // Pack payload: (instIdx << 22) | (clustIdx << 8) | triIndex
-                    uint payload = (instIdx << 22) | (clustIdx << 8) | triIndex;
-                    uint64_t packedVal = (uint64_t(depthInt) << 32) | uint64_t(payload);
-                    
-                    uint pixelIndex = uint(y) * uint(pcs.viewportWidth) + uint(x);
-                    atomicMin(visBuffer[pixelIndex], packedVal);
+        if (maxX_i < minX_i || maxY_i < minY_i) {
+            return;
+        }
+
+        // Setup common interpolation constants (no division in pixel loop)
+        float invDen = 1.0 / den;
+        float z0 = p0.z / p0.w;
+        float z1 = p1.z / p1.w;
+        float z2 = p2.z / p2.w;
+
+        uint payload = (instIdx << 22) | (clustIdx << 8) | triIndex;
+        uint64_t payloadBase = uint64_t(payload);
+
+        float v_x_step = e1.y * invDen;
+        float w_x_step = -e0.y * invDen;
+
+        // Choose between standard loop (for tiny triangles) and scanline solver
+        if (maxX_i - minX_i <= 4) {
+            for (int y = minY_i; y <= maxY_i; ++y) {
+                float v_const = (0.5 - v0.x) * e1.y * invDen - (float(y) + 0.5 - v0.y) * e1.x * invDen;
+                float w_const = e0.x * (float(y) + 0.5 - v0.y) * invDen - (0.5 - v0.x) * e0.y * invDen;
+
+                for (int x = minX_i; x <= maxX_i; ++x) {
+                    float v = float(x) * v_x_step + v_const;
+                    float w = float(x) * w_x_step + w_const;
+                    float u = 1.0 - v - w;
+
+                    if (u >= 0.0 && v >= 0.0 && w >= 0.0) {
+                        float z = u * z0 + v * z1 + w * z2;
+                        z = clamp(z, 0.0, 1.0);
+                        uint depthInt = uint(z * 4294967295.0);
+                        uint64_t packedVal = (uint64_t(depthInt) << 32) | payloadBase;
+                        uint pixelIndex = uint(y) * uint(pcs.viewportWidth) + uint(x);
+                        atomicMin(visBuffer[pixelIndex], packedVal);
+                    }
+                }
+            }
+        } else {
+            // Scanline Solver: Solve edge equations for x-interval to avoid testing out-of-bounds pixels
+            // Edge 0: A0 * x + B0 * y + C0 <= 0
+            float A0 = v2.y - v0.y;
+            float B0 = -(v2.x - v0.x);
+            float C0 = (0.5 - v0.x) * A0 + (0.5 - v0.y) * B0;
+
+            // Edge 1: A1 * x + B1 * y + C1 <= 0
+            float A1 = -(v1.y - v0.y);
+            float B1 = v1.x - v0.x;
+            float C1 = (0.5 - v0.x) * A1 + (0.5 - v0.y) * B1;
+
+            // Edge 2: A2 * x + B2 * y + C2 <= 0
+            float A2 = -(A0 + A1);
+            float B2 = -(B0 + B1);
+            float C2 = -(C0 + C1 - den);
+
+            // Precompute reciprocals to avoid division per-row
+            float invA0 = (abs(A0) > 0.0001) ? (1.0 / A0) : 0.0;
+            float invA1 = (abs(A1) > 0.0001) ? (1.0 / A1) : 0.0;
+            float invA2 = (abs(A2) > 0.0001) ? (1.0 / A2) : 0.0;
+
+            for (int y = minY_i; y <= maxY_i; ++y) {
+                float leftX = float(minX_i);
+                float rightX = float(maxX_i);
+                bool possible = true;
+
+                // Edge 0
+                if (A0 > 0.0001) {
+                    rightX = min(rightX, -(B0 * float(y) + C0) * invA0);
+                } else if (A0 < -0.0001) {
+                    leftX = max(leftX, -(B0 * float(y) + C0) * invA0);
+                } else {
+                    if (B0 * float(y) + C0 > 0.0) possible = false;
+                }
+
+                // Edge 1
+                if (A1 > 0.0001) {
+                    rightX = min(rightX, -(B1 * float(y) + C1) * invA1);
+                } else if (A1 < -0.0001) {
+                    leftX = max(leftX, -(B1 * float(y) + C1) * invA1);
+                } else {
+                    if (B1 * float(y) + C1 > 0.0) possible = false;
+                }
+
+                // Edge 2
+                if (A2 > 0.0001) {
+                    rightX = min(rightX, -(B2 * float(y) + C2) * invA2);
+                } else if (A2 < -0.0001) {
+                    leftX = max(leftX, -(B2 * float(y) + C2) * invA2);
+                } else {
+                    if (B2 * float(y) + C2 > 0.0) possible = false;
+                }
+
+                int startX = int(ceil(leftX));
+                int endX = int(floor(rightX));
+
+                if (possible && startX <= endX) {
+                    float v_const = (0.5 - v0.x) * e1.y * invDen - (float(y) + 0.5 - v0.y) * e1.x * invDen;
+                    float w_const = e0.x * (float(y) + 0.5 - v0.y) * invDen - (0.5 - v0.x) * e0.y * invDen;
+
+                    for (int x = startX; x <= endX; ++x) {
+                        float v = float(x) * v_x_step + v_const;
+                        float w = float(x) * w_x_step + w_const;
+                        float u = 1.0 - v - w;
+
+                        if (u >= 0.0 && v >= 0.0 && w >= 0.0) {
+                            float z = u * z0 + v * z1 + w * z2;
+                            z = clamp(z, 0.0, 1.0);
+                            uint depthInt = uint(z * 4294967295.0);
+                            uint64_t packedVal = (uint64_t(depthInt) << 32) | payloadBase;
+                            uint pixelIndex = uint(y) * uint(pcs.viewportWidth) + uint(x);
+                            atomicMin(visBuffer[pixelIndex], packedVal);
+                        }
+                    }
                 }
             }
         }
