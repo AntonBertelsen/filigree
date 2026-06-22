@@ -15,3 +15,6 @@ external/vcpkg/
 
 # Dear ImGui layout configuration
 imgui.ini
+
+# Filigree meshlet cache files
+*.meshletcache

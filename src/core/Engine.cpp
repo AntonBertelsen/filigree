@@ -63,8 +63,28 @@ Engine::Engine() {
     
     std::vector<MeshletData> meshletDatas;
     for (const auto& config : configs) {
-        std::cout << "Loading " << config.name << " model..." << std::endl;
-        auto meshNode = std::make_unique<MeshNode>(config.path);
+        std::string cachePath = config.path + ".meshletcache";
+        MeshletData meshletData;
+        bool cacheLoaded = ClusterDAGBuilder::loadFromFile(cachePath, meshletData);
+        
+        std::unique_ptr<MeshNode> meshNode;
+        if (cacheLoaded) {
+            std::cout << "Loaded Cluster DAG for " << config.name << " from cache: " << cachePath << std::endl;
+            meshNode = std::make_unique<MeshNode>(config.path, meshletData.originalVertices, meshletData.originalIndices);
+        } else {
+            std::cout << "Loading " << config.name << " model and building DAG..." << std::endl;
+            meshNode = std::make_unique<MeshNode>(config.path);
+            
+            MeshNode* weakNode = meshNode.get();
+            meshletData = ClusterDAGBuilder::buildClusterDAG(weakNode->getVertices(), weakNode->getIndices());
+            
+            if (ClusterDAGBuilder::saveToFile(cachePath, meshletData)) {
+                std::cout << "Saved Cluster DAG cache for " << config.name << " to: " << cachePath << std::endl;
+            } else {
+                std::cerr << "Failed to save Cluster DAG cache to: " << cachePath << std::endl;
+            }
+        }
+        
         meshNode->setPosition(config.position);
         meshNode->setScale(glm::vec3(config.scale));
         
@@ -78,10 +98,7 @@ Engine::Engine() {
         asset.scale = config.scale;
         asset.sceneNode = weakNode;
         
-        std::cout << "Building Cluster DAG for " << config.name << "..." << std::endl;
-        MeshletData meshletData = ClusterDAGBuilder::buildClusterDAG(weakNode->getVertices(), weakNode->getIndices());
         meshletDatas.push_back(meshletData);
-        
         models.push_back(asset);
     }
 

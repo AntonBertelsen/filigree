@@ -20,6 +20,7 @@ struct MeshVertex {
 class MeshNode : public Node {
 public:
     MeshNode(const std::string& modelPath);
+    MeshNode(const std::string& modelPath, const std::vector<MeshVertex>& vertices, const std::vector<uint32_t>& indices);
     virtual ~MeshNode() = default;
 
     const std::vector<MeshVertex>& getVertices() const { return vertices; }

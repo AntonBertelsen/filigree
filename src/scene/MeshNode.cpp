@@ -80,3 +80,7 @@ void MeshNode::loadModel() {
     std::cout << "Successfully loaded model: " << modelPath 
               << " (" << vertices.size() << " vertices, " << indices.size() << " indices)" << std::endl;
 }
+
+MeshNode::MeshNode(const std::string& modelPath, const std::vector<MeshVertex>& vertices, const std::vector<uint32_t>& indices)
+    : modelPath(modelPath), vertices(vertices), indices(indices) {
+}

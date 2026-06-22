@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <iostream>
 #include <algorithm>
+#include <fstream>
 
 static glm::vec4 unionSpheres(const std::vector<glm::vec4>& spheres) {
     if (spheres.empty()) return glm::vec4(0.0f);
@@ -523,4 +524,80 @@ MeshletData ClusterDAGBuilder::buildClusterDAG(
     packedData.originalIndices = indices;
     
     return packedData;
+}
+
+bool ClusterDAGBuilder::saveToFile(const std::string& cachePath, const MeshletData& data) {
+    std::ofstream out(cachePath, std::ios::binary);
+    if (!out.is_open()) {
+        return false;
+    }
+
+    // Write header
+    const char magic[4] = {'F', 'D', 'A', 'G'};
+    out.write(magic, 4);
+    uint32_t version = 1;
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+
+    // Helper lambda to write a vector
+    auto writeVector = [&](const auto& vec) {
+        uint64_t size = vec.size();
+        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+        if (size > 0) {
+            out.write(reinterpret_cast<const char*>(vec.data()), size * sizeof(vec[0]));
+        }
+    };
+
+    writeVector(data.flatVertices);
+    writeVector(data.flatIndices);
+    writeVector(data.indirectCommands);
+    writeVector(data.boundsList);
+    
+    out.write(reinterpret_cast<const char*>(&data.clusterCount), sizeof(data.clusterCount));
+
+    writeVector(data.originalVertices);
+    writeVector(data.originalIndices);
+
+    return out.good();
+}
+
+bool ClusterDAGBuilder::loadFromFile(const std::string& cachePath, MeshletData& outData) {
+    std::ifstream in(cachePath, std::ios::binary);
+    if (!in.is_open()) {
+        return false;
+    }
+
+    // Read header
+    char magic[4];
+    in.read(magic, 4);
+    if (magic[0] != 'F' || magic[1] != 'D' || magic[2] != 'A' || magic[3] != 'G') {
+        return false;
+    }
+
+    uint32_t version = 0;
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (version != 1) {
+        return false;
+    }
+
+    // Helper lambda to read a vector
+    auto readVector = [&](auto& vec) {
+        uint64_t size = 0;
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+        vec.resize(size);
+        if (size > 0) {
+            in.read(reinterpret_cast<char*>(vec.data()), size * sizeof(vec[0]));
+        }
+    };
+
+    readVector(outData.flatVertices);
+    readVector(outData.flatIndices);
+    readVector(outData.indirectCommands);
+    readVector(outData.boundsList);
+
+    in.read(reinterpret_cast<char*>(&outData.clusterCount), sizeof(outData.clusterCount));
+
+    readVector(outData.originalVertices);
+    readVector(outData.originalIndices);
+
+    return in.good();
 }

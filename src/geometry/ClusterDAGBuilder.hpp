@@ -39,4 +39,7 @@ public:
         const std::vector<MeshVertex>& vertices, 
         const std::vector<uint32_t>& indices
     );
+
+    static bool saveToFile(const std::string& cachePath, const MeshletData& data);
+    static bool loadFromFile(const std::string& cachePath, MeshletData& outData);
 };
