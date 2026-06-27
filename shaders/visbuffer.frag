@@ -1,6 +1,9 @@
 #version 450
+
+#if !VISBUFFER_32BIT
 #extension GL_EXT_shader_atomic_int64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#endif
 
 #if EARLY_Z
 layout(early_fragment_tests) in;
@@ -15,9 +18,15 @@ layout(push_constant) uniform PushConstants {
     float viewportHeight;
 } pcs;
 
+#if VISBUFFER_32BIT
+layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
+    uint visBuffer[];
+};
+#else
 layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
     uint64_t visBuffer[];
 };
+#endif
 
 void main() {
     uint payload;
@@ -27,9 +36,14 @@ void main() {
         payload = inVisPayload | (gl_PrimitiveID & 0xFFFFFu);
     }
     
+    uint pixelIndex = uint(gl_FragCoord.y) * uint(pcs.viewportWidth) + uint(gl_FragCoord.x);
+
+#if VISBUFFER_32BIT
+    // In 32-bit hardware pass, we use EQUAL depth testing so only the winning fragment runs.
+    visBuffer[pixelIndex] = payload;
+#else
     uint depthInt = uint(gl_FragCoord.z * 4294967295.0);
     uint64_t packedVal = (uint64_t(depthInt) << 32) | uint64_t(payload);
-    
-    uint pixelIndex = uint(gl_FragCoord.y) * uint(pcs.viewportWidth) + uint(gl_FragCoord.x);
     atomicMin(visBuffer[pixelIndex], packedVal);
+#endif
 }

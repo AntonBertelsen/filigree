@@ -15,7 +15,10 @@ VisBufferPipeline::~VisBufferPipeline() {
 }
 
 void VisBufferPipeline::bind(VkCommandBuffer cb, bool useDepthTested) {
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, useDepthTested ? graphicsPipelineDepthTested : graphicsPipelinePureUAV);
+    VkPipeline pipeline = context.isShaderInt64AtomicsSupported() ? 
+        (useDepthTested ? graphicsPipelineDepthTested64 : graphicsPipelinePureUAV64) :
+        (useDepthTested ? graphicsPipelineDepthTested32 : graphicsPipelinePureUAV32);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 }
 
 void VisBufferPipeline::pushConstants(VkCommandBuffer cb, const VisBufferPushConstants& pcs) {
@@ -24,15 +27,25 @@ void VisBufferPipeline::pushConstants(VkCommandBuffer cb, const VisBufferPushCon
 
 void VisBufferPipeline::createPipeline() {
     VkDevice device = context.getDevice();
+    bool support64Bit = context.isShaderInt64AtomicsSupported();
 
     // 1. Load Compiled SPIR-V shaders
     auto vertShaderCode = VulkanContext::readFile(SHADERS_DIR "visbuffer_vert.spv");
-    auto fragShaderCodePureUAV = VulkanContext::readFile(SHADERS_DIR "visbuffer_frag.spv");
-    auto fragShaderCodeDepthTested = VulkanContext::readFile(SHADERS_DIR "visbuffer_earlyz_frag.spv");
-
     VkShaderModule vertShaderModule = context.createShaderModule(vertShaderCode);
-    VkShaderModule fragShaderModulePureUAV = context.createShaderModule(fragShaderCodePureUAV);
-    VkShaderModule fragShaderModuleDepthTested = context.createShaderModule(fragShaderCodeDepthTested);
+
+    VkShaderModule fragShaderModulePureUAV64 = VK_NULL_HANDLE;
+    VkShaderModule fragShaderModuleDepthTested64 = VK_NULL_HANDLE;
+    if (support64Bit) {
+        auto fragShaderCodePureUAV = VulkanContext::readFile(SHADERS_DIR "visbuffer_frag.spv");
+        auto fragShaderCodeDepthTested = VulkanContext::readFile(SHADERS_DIR "visbuffer_earlyz_frag.spv");
+        fragShaderModulePureUAV64 = context.createShaderModule(fragShaderCodePureUAV);
+        fragShaderModuleDepthTested64 = context.createShaderModule(fragShaderCodeDepthTested);
+    }
+
+    auto fragShaderCodePureUAV32 = VulkanContext::readFile(SHADERS_DIR "visbuffer_32bit_frag.spv");
+    auto fragShaderCodeDepthTested32 = VulkanContext::readFile(SHADERS_DIR "visbuffer_earlyz_32bit_frag.spv");
+    VkShaderModule fragShaderModulePureUAV32 = context.createShaderModule(fragShaderCodePureUAV32);
+    VkShaderModule fragShaderModuleDepthTested32 = context.createShaderModule(fragShaderCodeDepthTested32);
 
     // 2. Configure Shared Vertex Input state to read MeshVertex attributes
     static VkVertexInputBindingDescription bindingDescription{};
@@ -135,97 +148,184 @@ void VisBufferPipeline::createPipeline() {
     renderingCreateInfo.pColorAttachmentFormats = nullptr;
     renderingCreateInfo.depthAttachmentFormat = depthFormat;
 
-    // --- PIPELINE A: Pure UAV (No Depth Testing/Writing) ---
-    VkPipelineShaderStageCreateInfo vertStageInfoA{};
-    vertStageInfoA.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertStageInfoA.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertStageInfoA.module = vertShaderModule;
-    vertStageInfoA.pName = "main";
+    // --- PIPELINES SHARED SHADER STAGES CONFIGS ---
+    VkPipelineShaderStageCreateInfo vertStageInfo{};
+    vertStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStageInfo.module = vertShaderModule;
+    vertStageInfo.pName = "main";
 
-    VkPipelineShaderStageCreateInfo fragStageInfoA{};
-    fragStageInfoA.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragStageInfoA.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragStageInfoA.module = fragShaderModulePureUAV;
-    fragStageInfoA.pName = "main";
+    // A: 64-Bit Pipelines
+    if (support64Bit) {
+        VkPipelineShaderStageCreateInfo fragStageInfoPure64{};
+        fragStageInfoPure64.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStageInfoPure64.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStageInfoPure64.module = fragShaderModulePureUAV64;
+        fragStageInfoPure64.pName = "main";
 
-    VkPipelineShaderStageCreateInfo shaderStagesA[] = {vertStageInfoA, fragStageInfoA};
+        VkPipelineShaderStageCreateInfo stagesPure64[] = {vertStageInfo, fragStageInfoPure64};
 
-    VkPipelineDepthStencilStateCreateInfo depthStencilA{};
-    depthStencilA.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencilA.depthTestEnable = VK_FALSE;
-    depthStencilA.depthWriteEnable = VK_FALSE;
-    depthStencilA.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencilA.depthBoundsTestEnable = VK_FALSE;
-    depthStencilA.stencilTestEnable = VK_FALSE;
+        VkPipelineDepthStencilStateCreateInfo depthStencilPure64{};
+        depthStencilPure64.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilPure64.depthTestEnable = VK_FALSE;
+        depthStencilPure64.depthWriteEnable = VK_FALSE;
+        depthStencilPure64.depthCompareOp = VK_COMPARE_OP_LESS;
 
-    VkGraphicsPipelineCreateInfo pipelineInfoA{};
-    pipelineInfoA.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfoA.pNext = &renderingCreateInfo;
-    pipelineInfoA.stageCount = 2;
-    pipelineInfoA.pStages = shaderStagesA;
-    pipelineInfoA.pVertexInputState = &vertexInputInfo;
-    pipelineInfoA.pInputAssemblyState = &inputAssembly;
-    pipelineInfoA.pViewportState = &viewportState;
-    pipelineInfoA.pRasterizationState = &rasterizer;
-    pipelineInfoA.pMultisampleState = &multisampling;
-    pipelineInfoA.pDepthStencilState = &depthStencilA;
-    pipelineInfoA.pColorBlendState = &colorBlending;
-    pipelineInfoA.pDynamicState = &dynamicStateInfo;
-    pipelineInfoA.layout = pipelineLayout;
-    pipelineInfoA.renderPass = VK_NULL_HANDLE;
-    pipelineInfoA.subpass = 0;
+        VkGraphicsPipelineCreateInfo pipelineInfoPure64{};
+        pipelineInfoPure64.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfoPure64.pNext = &renderingCreateInfo;
+        pipelineInfoPure64.stageCount = 2;
+        pipelineInfoPure64.pStages = stagesPure64;
+        pipelineInfoPure64.pVertexInputState = &vertexInputInfo;
+        pipelineInfoPure64.pInputAssemblyState = &inputAssembly;
+        pipelineInfoPure64.pViewportState = &viewportState;
+        pipelineInfoPure64.pRasterizationState = &rasterizer;
+        pipelineInfoPure64.pMultisampleState = &multisampling;
+        pipelineInfoPure64.pDepthStencilState = &depthStencilPure64;
+        pipelineInfoPure64.pColorBlendState = &colorBlending;
+        pipelineInfoPure64.pDynamicState = &dynamicStateInfo;
+        pipelineInfoPure64.layout = pipelineLayout;
 
-    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoA, nullptr, &graphicsPipelinePureUAV) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create VisBuffer Pure UAV graphics pipeline!");
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoPure64, nullptr, &graphicsPipelinePureUAV64) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 64-bit VisBuffer Pure UAV graphics pipeline!");
+        }
+
+        VkPipelineShaderStageCreateInfo fragStageInfoTested64{};
+        fragStageInfoTested64.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStageInfoTested64.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStageInfoTested64.module = fragShaderModuleDepthTested64;
+        fragStageInfoTested64.pName = "main";
+
+        VkPipelineShaderStageCreateInfo stagesTested64[] = {vertStageInfo, fragStageInfoTested64};
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilTested64{};
+        depthStencilTested64.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilTested64.depthTestEnable = VK_TRUE;
+        depthStencilTested64.depthWriteEnable = VK_TRUE;
+        depthStencilTested64.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        VkGraphicsPipelineCreateInfo pipelineInfoTested64{};
+        pipelineInfoTested64.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfoTested64.pNext = &renderingCreateInfo;
+        pipelineInfoTested64.stageCount = 2;
+        pipelineInfoTested64.pStages = stagesTested64;
+        pipelineInfoTested64.pVertexInputState = &vertexInputInfo;
+        pipelineInfoTested64.pInputAssemblyState = &inputAssembly;
+        pipelineInfoTested64.pViewportState = &viewportState;
+        pipelineInfoTested64.pRasterizationState = &rasterizer;
+        pipelineInfoTested64.pMultisampleState = &multisampling;
+        pipelineInfoTested64.pDepthStencilState = &depthStencilTested64;
+        pipelineInfoTested64.pColorBlendState = &colorBlending;
+        pipelineInfoTested64.pDynamicState = &dynamicStateInfo;
+        pipelineInfoTested64.layout = pipelineLayout;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoTested64, nullptr, &graphicsPipelineDepthTested64) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 64-bit VisBuffer Depth Tested graphics pipeline!");
+        }
     }
 
-    // --- PIPELINE B: Depth Tested (With Depth Testing/Writing & Early-Z shader) ---
-    VkPipelineShaderStageCreateInfo vertStageInfoB{};
-    vertStageInfoB.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertStageInfoB.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertStageInfoB.module = vertShaderModule;
-    vertStageInfoB.pName = "main";
+    // B: 32-Bit Pipelines
+    {
+        VkPipelineShaderStageCreateInfo fragStageInfoPure32{};
+        fragStageInfoPure32.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStageInfoPure32.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStageInfoPure32.module = fragShaderModulePureUAV32;
+        fragStageInfoPure32.pName = "main";
 
-    VkPipelineShaderStageCreateInfo fragStageInfoB{};
-    fragStageInfoB.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragStageInfoB.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragStageInfoB.module = fragShaderModuleDepthTested;
-    fragStageInfoB.pName = "main";
+        VkPipelineShaderStageCreateInfo stagesPure32[] = {vertStageInfo, fragStageInfoPure32};
 
-    VkPipelineShaderStageCreateInfo shaderStagesB[] = {vertStageInfoB, fragStageInfoB};
+        VkPipelineDepthStencilStateCreateInfo depthStencilPure32{};
+        depthStencilPure32.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilPure32.depthTestEnable = VK_FALSE;
+        depthStencilPure32.depthWriteEnable = VK_FALSE;
+        depthStencilPure32.depthCompareOp = VK_COMPARE_OP_LESS;
 
-    VkPipelineDepthStencilStateCreateInfo depthStencilB{};
-    depthStencilB.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencilB.depthTestEnable = VK_TRUE;
-    depthStencilB.depthWriteEnable = VK_TRUE;
-    depthStencilB.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencilB.depthBoundsTestEnable = VK_FALSE;
-    depthStencilB.stencilTestEnable = VK_FALSE;
+        VkGraphicsPipelineCreateInfo pipelineInfoPure32{};
+        pipelineInfoPure32.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfoPure32.pNext = &renderingCreateInfo;
+        pipelineInfoPure32.stageCount = 2;
+        pipelineInfoPure32.pStages = stagesPure32;
+        pipelineInfoPure32.pVertexInputState = &vertexInputInfo;
+        pipelineInfoPure32.pInputAssemblyState = &inputAssembly;
+        pipelineInfoPure32.pViewportState = &viewportState;
+        pipelineInfoPure32.pRasterizationState = &rasterizer;
+        pipelineInfoPure32.pMultisampleState = &multisampling;
+        pipelineInfoPure32.pDepthStencilState = &depthStencilPure32;
+        pipelineInfoPure32.pColorBlendState = &colorBlending;
+        pipelineInfoPure32.pDynamicState = &dynamicStateInfo;
+        pipelineInfoPure32.layout = pipelineLayout;
 
-    VkGraphicsPipelineCreateInfo pipelineInfoB{};
-    pipelineInfoB.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfoB.pNext = &renderingCreateInfo;
-    pipelineInfoB.stageCount = 2;
-    pipelineInfoB.pStages = shaderStagesB;
-    pipelineInfoB.pVertexInputState = &vertexInputInfo;
-    pipelineInfoB.pInputAssemblyState = &inputAssembly;
-    pipelineInfoB.pViewportState = &viewportState;
-    pipelineInfoB.pRasterizationState = &rasterizer;
-    pipelineInfoB.pMultisampleState = &multisampling;
-    pipelineInfoB.pDepthStencilState = &depthStencilB;
-    pipelineInfoB.pColorBlendState = &colorBlending;
-    pipelineInfoB.pDynamicState = &dynamicStateInfo;
-    pipelineInfoB.layout = pipelineLayout;
-    pipelineInfoB.renderPass = VK_NULL_HANDLE;
-    pipelineInfoB.subpass = 0;
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoPure32, nullptr, &graphicsPipelinePureUAV32) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 32-bit VisBuffer Pure UAV graphics pipeline!");
+        }
 
-    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoB, nullptr, &graphicsPipelineDepthTested) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create VisBuffer Depth Tested graphics pipeline!");
+        VkPipelineShaderStageCreateInfo fragStageInfoTested32{};
+        fragStageInfoTested32.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStageInfoTested32.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStageInfoTested32.module = fragShaderModuleDepthTested32;
+        fragStageInfoTested32.pName = "main";
+
+        VkPipelineShaderStageCreateInfo stagesTested32[] = {vertStageInfo, fragStageInfoTested32};
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilTested32{};
+        depthStencilTested32.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilTested32.depthTestEnable = VK_TRUE;
+        depthStencilTested32.depthWriteEnable = VK_FALSE; // No writing to depth buffer in Pass 2!
+        depthStencilTested32.depthCompareOp = VK_COMPARE_OP_EQUAL; // EQUAL check for Pass 2!
+
+        VkGraphicsPipelineCreateInfo pipelineInfoTested32{};
+        pipelineInfoTested32.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfoTested32.pNext = &renderingCreateInfo;
+        pipelineInfoTested32.stageCount = 2;
+        pipelineInfoTested32.pStages = stagesTested32;
+        pipelineInfoTested32.pVertexInputState = &vertexInputInfo;
+        pipelineInfoTested32.pInputAssemblyState = &inputAssembly;
+        pipelineInfoTested32.pViewportState = &viewportState;
+        pipelineInfoTested32.pRasterizationState = &rasterizer;
+        pipelineInfoTested32.pMultisampleState = &multisampling;
+        pipelineInfoTested32.pDepthStencilState = &depthStencilTested32;
+        pipelineInfoTested32.pColorBlendState = &colorBlending;
+        pipelineInfoTested32.pDynamicState = &dynamicStateInfo;
+        pipelineInfoTested32.layout = pipelineLayout;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoTested32, nullptr, &graphicsPipelineDepthTested32) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 32-bit VisBuffer Depth Tested graphics pipeline!");
+        }
+    }
+
+    // C: Depth-Only pipeline (No Fragment Shader Stage)
+    {
+        VkPipelineDepthStencilStateCreateInfo depthStencilOnly{};
+        depthStencilOnly.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencilOnly.depthTestEnable = VK_TRUE;
+        depthStencilOnly.depthWriteEnable = VK_TRUE;
+        depthStencilOnly.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        VkGraphicsPipelineCreateInfo pipelineInfoOnly{};
+        pipelineInfoOnly.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfoOnly.pNext = &renderingCreateInfo;
+        pipelineInfoOnly.stageCount = 1; // Only vertex stage!
+        pipelineInfoOnly.pStages = &vertStageInfo;
+        pipelineInfoOnly.pVertexInputState = &vertexInputInfo;
+        pipelineInfoOnly.pInputAssemblyState = &inputAssembly;
+        pipelineInfoOnly.pViewportState = &viewportState;
+        pipelineInfoOnly.pRasterizationState = &rasterizer;
+        pipelineInfoOnly.pMultisampleState = &multisampling;
+        pipelineInfoOnly.pDepthStencilState = &depthStencilOnly;
+        pipelineInfoOnly.pColorBlendState = &colorBlending;
+        pipelineInfoOnly.pDynamicState = &dynamicStateInfo;
+        pipelineInfoOnly.layout = pipelineLayout;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfoOnly, nullptr, &graphicsPipelineDepthOnly) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create VisBuffer Depth-Only graphics pipeline!");
+        }
     }
 
     // Clean up shader modules
-    vkDestroyShaderModule(device, fragShaderModulePureUAV, nullptr);
-    vkDestroyShaderModule(device, fragShaderModuleDepthTested, nullptr);
+    if (fragShaderModulePureUAV64 != VK_NULL_HANDLE) vkDestroyShaderModule(device, fragShaderModulePureUAV64, nullptr);
+    if (fragShaderModuleDepthTested64 != VK_NULL_HANDLE) vkDestroyShaderModule(device, fragShaderModuleDepthTested64, nullptr);
+    vkDestroyShaderModule(device, fragShaderModulePureUAV32, nullptr);
+    vkDestroyShaderModule(device, fragShaderModuleDepthTested32, nullptr);
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 
     std::cout << "Successfully created Vulkan graphics pipelines inside VisBufferPipeline!" << std::endl;
@@ -233,13 +333,25 @@ void VisBufferPipeline::createPipeline() {
 
 void VisBufferPipeline::cleanup() {
     VkDevice device = context.getDevice();
-    if (graphicsPipelinePureUAV != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, graphicsPipelinePureUAV, nullptr);
-        graphicsPipelinePureUAV = VK_NULL_HANDLE;
+    if (graphicsPipelinePureUAV64 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipelinePureUAV64, nullptr);
+        graphicsPipelinePureUAV64 = VK_NULL_HANDLE;
     }
-    if (graphicsPipelineDepthTested != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, graphicsPipelineDepthTested, nullptr);
-        graphicsPipelineDepthTested = VK_NULL_HANDLE;
+    if (graphicsPipelineDepthTested64 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipelineDepthTested64, nullptr);
+        graphicsPipelineDepthTested64 = VK_NULL_HANDLE;
+    }
+    if (graphicsPipelinePureUAV32 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipelinePureUAV32, nullptr);
+        graphicsPipelinePureUAV32 = VK_NULL_HANDLE;
+    }
+    if (graphicsPipelineDepthTested32 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipelineDepthTested32, nullptr);
+        graphicsPipelineDepthTested32 = VK_NULL_HANDLE;
+    }
+    if (graphicsPipelineDepthOnly != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipelineDepthOnly, nullptr);
+        graphicsPipelineDepthOnly = VK_NULL_HANDLE;
     }
     if (pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);

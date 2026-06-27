@@ -50,16 +50,26 @@ void ForwardPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t ima
             vkCmdBindVertexBuffers(cb, 0, 1, &engine.gpuScene.vertexBuffer, offsets);
             vkCmdBindIndexBuffer(cb, engine.gpuScene.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-            // Draw via Multi-Draw Indirect Count
-            vkCmdDrawIndexedIndirectCount(
-                cb,
-                engine.gpuScene.culledIndirectBuffer[currentFrame],
-                0,
-                engine.gpuScene.drawCountBuffer[currentFrame],
-                0,
-                engine.gpuScene.totalCullTasks,
-                sizeof(VkDrawIndexedIndirectCommand)
-            );
+            // Draw via Multi-Draw Indirect Count or fallback
+            if (context.isDrawIndirectCountSupported()) {
+                vkCmdDrawIndexedIndirectCount(
+                    cb,
+                    engine.gpuScene.culledIndirectBuffer[currentFrame],
+                    0,
+                    engine.gpuScene.drawCountBuffer[currentFrame],
+                    0,
+                    engine.gpuScene.totalCullTasks,
+                    sizeof(VkDrawIndexedIndirectCommand)
+                );
+            } else {
+                vkCmdDrawIndexedIndirect(
+                    cb,
+                    engine.gpuScene.culledIndirectBuffer[currentFrame],
+                    0,
+                    engine.gpuScene.totalCullTasks,
+                    sizeof(VkDrawIndexedIndirectCommand)
+                );
+            }
         }
     } else {
         if (engine.gpuScene.traditionalIndirectBuffer[currentFrame] != VK_NULL_HANDLE) {

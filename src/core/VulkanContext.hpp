@@ -41,10 +41,16 @@ public:
 
     VkCommandPool getCommandPool() const { return commandPool; }
     VmaAllocator getAllocator() const { return allocator; }
+    bool isDrawIndirectCountSupported() const { return drawIndirectCountSupported; }
+    bool isShaderInt64AtomicsSupported() const { return shaderInt64AtomicsSupported; }
 
     // Swapchain recreation support
     void recreateSwapChain();
     void cleanupSwapChain();
+
+    // VSync toggle — triggers swapchain recreation on next frame when changed
+    bool isVsyncEnabled() const { return vsyncEnabled; }
+    void setVsyncEnabled(bool enabled) { vsyncEnabled = enabled; }
 
     // Buffer helpers (using VMA)
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocFlags, VkBuffer& buffer, VmaAllocation& allocation);
@@ -153,4 +159,8 @@ private:
 
     uint32_t currentFrame = 0;
     VmaAllocator allocator = VK_NULL_HANDLE;
+
+    bool drawIndirectCountSupported = false;
+    bool shaderInt64AtomicsSupported = false;
+    bool vsyncEnabled = true;
 };

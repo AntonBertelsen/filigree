@@ -14,8 +14,8 @@ ResolvePipeline::~ResolvePipeline() {
     cleanup();
 }
 
-void ResolvePipeline::bind(VkCommandBuffer cb) {
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+void ResolvePipeline::bind(VkCommandBuffer cb, bool use64Bit) {
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, getGraphicsPipeline(use64Bit));
 }
 
 void ResolvePipeline::pushConstants(VkCommandBuffer cb, const ResolvePushConstants& pcs) {
@@ -25,12 +25,20 @@ void ResolvePipeline::pushConstants(VkCommandBuffer cb, const ResolvePushConstan
 void ResolvePipeline::createPipeline() {
     VkDevice device = context.getDevice();
 
+    bool support64Bit = context.isShaderInt64AtomicsSupported();
+
     // 1. Load Compiled SPIR-V shaders
     auto vertShaderCode = VulkanContext::readFile(SHADERS_DIR "resolve_vert.spv");
-    auto fragShaderCode = VulkanContext::readFile(SHADERS_DIR "resolve_frag.spv");
-
     VkShaderModule vertShaderModule = context.createShaderModule(vertShaderCode);
-    VkShaderModule fragShaderModule = context.createShaderModule(fragShaderCode);
+
+    VkShaderModule fragShaderModule64 = VK_NULL_HANDLE;
+    if (support64Bit) {
+        auto fragShaderCode = VulkanContext::readFile(SHADERS_DIR "resolve_frag.spv");
+        fragShaderModule64 = context.createShaderModule(fragShaderCode);
+    }
+
+    auto fragShaderCode32 = VulkanContext::readFile(SHADERS_DIR "resolve_32bit_frag.spv");
+    VkShaderModule fragShaderModule32 = context.createShaderModule(fragShaderCode32);
 
     // 2. Configure shader stages
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -39,13 +47,7 @@ void ResolvePipeline::createPipeline() {
     vertShaderStageInfo.module = vertShaderModule;
     vertShaderStageInfo.pName = "main";
 
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
-    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragShaderStageInfo.module = fragShaderModule;
-    fragShaderStageInfo.pName = "main";
 
-    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
     // 3. Fullscreen Quad has no vertex inputs
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
@@ -140,40 +142,99 @@ void ResolvePipeline::createPipeline() {
     renderingCreateInfo.pColorAttachmentFormats = &swapChainImageFormat;
     renderingCreateInfo.depthAttachmentFormat = context.getDepthFormat();
 
-    // 12. Create Graphics Pipeline
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.pNext = &renderingCreateInfo;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicStateInfo;
-    pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = VK_NULL_HANDLE;
-    pipelineInfo.subpass = 0;
+    // 12. Create Graphics Pipeline (32-bit, always supported)
+    {
+        VkPipelineShaderStageCreateInfo shaderStages32[] = {
+            vertShaderStageInfo,
+            {
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                nullptr,
+                0,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                fragShaderModule32,
+                "main",
+                nullptr
+            }
+        };
 
-    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create Resolve graphics pipeline!");
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.pNext = &renderingCreateInfo;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = shaderStages32;
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamicStateInfo;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
+        pipelineInfo.subpass = 0;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline32) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 32-bit Resolve graphics pipeline!");
+        }
+    }
+
+    // 13. Create Graphics Pipeline (64-bit, only if supported)
+    if (support64Bit) {
+        VkPipelineShaderStageCreateInfo shaderStages64[] = {
+            vertShaderStageInfo,
+            {
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                nullptr,
+                0,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                fragShaderModule64,
+                "main",
+                nullptr
+            }
+        };
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.pNext = &renderingCreateInfo;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = shaderStages64;
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamicStateInfo;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
+        pipelineInfo.subpass = 0;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline64) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 64-bit Resolve graphics pipeline!");
+        }
+    } else {
+        graphicsPipeline64 = VK_NULL_HANDLE;
     }
 
     // Clean up shader modules
-    vkDestroyShaderModule(device, fragShaderModule, nullptr);
+    if (fragShaderModule64 != VK_NULL_HANDLE) vkDestroyShaderModule(device, fragShaderModule64, nullptr);
+    vkDestroyShaderModule(device, fragShaderModule32, nullptr);
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 
-    std::cout << "Successfully created Vulkan graphics pipeline inside ResolvePipeline!" << std::endl;
+    std::cout << "Successfully created Vulkan graphics pipelines inside ResolvePipeline!" << std::endl;
 }
 
 void ResolvePipeline::cleanup() {
     VkDevice device = context.getDevice();
-    if (graphicsPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, graphicsPipeline, nullptr);
-        graphicsPipeline = VK_NULL_HANDLE;
+    if (graphicsPipeline64 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipeline64, nullptr);
+        graphicsPipeline64 = VK_NULL_HANDLE;
+    }
+    if (graphicsPipeline32 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, graphicsPipeline32, nullptr);
+        graphicsPipeline32 = VK_NULL_HANDLE;
     }
     if (pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);

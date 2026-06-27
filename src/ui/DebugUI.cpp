@@ -1,6 +1,7 @@
 #include "ui/DebugUI.hpp"
 #include "core/Engine.hpp"
 #include "core/VulkanContext.hpp"
+#include "renderer/VulkanRenderer.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -67,6 +68,7 @@ void DebugUI::update(Engine& engine, float deltaTime) {
     drawPerformanceOverlay(engine);
     drawControlPanel(engine);
     drawBenchmarkPanel(engine, deltaTime);
+    drawGpuTimingPanel(engine);
 
     // Render ImGui draw lists
     ImGui::Render();
@@ -177,6 +179,20 @@ void DebugUI::drawControlPanel(Engine& engine) {
             engine.syncMode = static_cast<Engine::SyncMode>(sync);
         }
 
+        int vbMode = static_cast<int>(engine.visBufferMode);
+        const char* vbModes[] = { "SINGLE_PASS_64BIT (Hardware UAV)", "TWO_PASS_32BIT (M1 Fallback / Early-Z)" };
+        if (!engine.context->isShaderInt64AtomicsSupported()) {
+            ImGui::BeginDisabled();
+            ImGui::Combo("VisBuffer Storage Mode", &vbMode, vbModes, 2);
+            ImGui::EndDisabled();
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "64-bit atomics unsupported on this GPU.");
+        } else {
+            if (ImGui::Combo("VisBuffer Storage Mode", &vbMode, vbModes, 2)) {
+                engine.visBufferMode = static_cast<Engine::VisBufferMode>(vbMode);
+                engine.recreateSwapChain();
+            }
+        }
+
         if (engine.rasterizerMode == Engine::RasterizerMode::HYBRID) {
             ImGui::SliderFloat("Software Size Threshold (px)", &engine.sizeThreshold, 1.0f, 256.0f, "%.1f");
         }
@@ -191,7 +207,25 @@ void DebugUI::drawControlPanel(Engine& engine) {
 
         ImGui::Checkbox("HZB Occlusion Culling", &engine.hzbCullingEnabled);
         ImGui::Checkbox("Freeze Culling Frustum", &engine.freezeCulling);
+
+        if (!engine.context->isDrawIndirectCountSupported()) {
+            ImGui::Checkbox("Fallback DrawCount Optimization", &engine.enableDrawCountOptimization);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Limits fallback indirect draw count via GPU-to-CPU readback to avoid driver overhead from empty commands on macOS.");
+            }
+        }
     }
+
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Display:");
+    bool vsync = engine.context->isVsyncEnabled();
+    if (ImGui::Checkbox("VSync", &vsync)) {
+        engine.context->setVsyncEnabled(vsync);
+        engine.recreateSwapChain(); // apply new present mode immediately
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(uncap for benchmarking)");
 
     ImGui::Separator();
     ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Debug Visualizers:");
@@ -261,6 +295,96 @@ void DebugUI::drawBenchmarkPanel(Engine& engine, float deltaTime) {
     ImGui::End();
 }
 
+void DebugUI::drawGpuTimingPanel(Engine& engine) {
+    const GpuTimestampPool& pool = engine.renderer->getTimestampPool();
+    uint32_t frameIdx = engine.context->getCurrentFrameIndex();
+
+    ImGui::SetNextWindowPos(ImVec2(10, 430), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(380, 280), ImGuiCond_FirstUseEver);
+    ImGui::Begin("GPU Pass Timing");
+
+    if (!pool.isSupported()) {
+        ImGui::TextColored(ImVec4(1,0.4f,0.4f,1), "Timestamps not supported on this GPU.");
+        ImGui::End();
+        return;
+    }
+
+    // Pair: (label, begin_ts, end_ts, color)
+    struct PassInfo { const char* label; GpuTimestamp begin; GpuTimestamp end; ImVec4 color; };
+    PassInfo passes[] = {
+        { "Cull",         TS_FRAME_START,  TS_CULL_END,       {0.4f, 0.8f, 0.4f, 1.0f} },
+        { "SW Rasterizer",TS_CULL_END,     TS_SW_RASTER_END,  {1.0f, 0.4f, 0.2f, 1.0f} },
+        { "HW Rasterizer",TS_SW_RASTER_END,TS_HW_RASTER_END,  {0.3f, 0.6f, 1.0f, 1.0f} },
+        { "Resolve",      TS_HW_RASTER_END,TS_RESOLVE_END,    {0.8f, 0.5f, 0.2f, 1.0f} },
+        { "HZB",          TS_RESOLVE_END,  TS_HZB_END,        {0.7f, 0.3f, 0.8f, 1.0f} },
+        { "Debug Overlay",TS_HZB_END,      TS_DEBUG_END,       {0.5f, 0.5f, 0.5f, 1.0f} },
+    };
+
+    float totalGpuMs = pool.elapsedMs(TS_FRAME_START, TS_FRAME_END, frameIdx);
+
+    ImGui::Text("Total GPU frame: %.3f ms  (%.1f fps budget)",
+                totalGpuMs, totalGpuMs > 0.0f ? 1000.0f / totalGpuMs : 0.0f);
+    ImGui::Separator();
+
+    // Stacked bar chart
+    float barWidth  = ImGui::GetContentRegionAvail().x;
+    float barHeight = 20.0f;
+    ImVec2 barStart = ImGui::GetCursorScreenPos();
+    ImDrawList* dl  = ImGui::GetWindowDrawList();
+
+    float cursor = 0.0f;
+    for (auto& p : passes) {
+        float ms = pool.elapsedMs(p.begin, p.end, frameIdx);
+        float frac = (totalGpuMs > 0.0f) ? ms / totalGpuMs : 0.0f;
+        float w = frac * barWidth;
+        ImU32 col = ImGui::ColorConvertFloat4ToU32(p.color);
+        dl->AddRectFilled(
+            ImVec2(barStart.x + cursor, barStart.y),
+            ImVec2(barStart.x + cursor + w, barStart.y + barHeight),
+            col
+        );
+        cursor += w;
+    }
+    // Advance cursor past the bar
+    ImGui::Dummy(ImVec2(barWidth, barHeight));
+
+    ImGui::Separator();
+
+    // Detailed table
+    if (ImGui::BeginTable("GpuPassTable", 3,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("Pass",      ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("ms",        ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("%",         ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableHeadersRow();
+
+        for (auto& p : passes) {
+            float ms   = pool.elapsedMs(p.begin, p.end, frameIdx);
+            float pct  = (totalGpuMs > 0.0f) ? 100.0f * ms / totalGpuMs : 0.0f;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(p.color, "%s", p.label);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.3f", ms);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%.1f%%", pct);
+        }
+
+        // Total row
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextColored(ImVec4(1,1,1,1), "TOTAL");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("%.3f", totalGpuMs);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("100%%");
+
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
 void DebugUI::runBenchmarkCycle(Engine& engine, float deltaTime) {
     if (!benchmarkRunning) return;
 
@@ -302,9 +426,11 @@ void DebugUI::runBenchmarkCycle(Engine& engine, float deltaTime) {
             std::vector<std::string> rasterModes = { "Pure HW", "Pure SW", "Hybrid" };
             std::vector<std::string> hwModes = { "Pure UAV", "Depth Tested" };
             std::vector<std::string> syncModes = { "Seq", "Par" };
+            std::vector<std::string> vbModes = { "64b", "32b" };
             modeDesc = std::string("Nanite: ") + rasterModes[static_cast<int>(engine.rasterizerMode)] + 
                        " (" + hwModes[static_cast<int>(engine.hwPathMode)] + ", " + 
-                       syncModes[static_cast<int>(engine.syncMode)] + ")";
+                       syncModes[static_cast<int>(engine.syncMode)] + ", " +
+                       vbModes[static_cast<int>(engine.visBufferMode)] + ")";
         }
 
         BenchmarkResults res{};

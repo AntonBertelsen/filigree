@@ -159,9 +159,19 @@ void VulkanContext::createInstance() {
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
+
+
     auto extensions = getRequiredExtensions();
+    std::cout << "Enabling instance extensions:" << std::endl;
+    for (const auto& ext : extensions) {
+        std::cout << "  - " << ext << std::endl;
+    }
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
+
+#ifdef __APPLE__
+    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 
     if (enableValidationLayers) {
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
@@ -172,7 +182,15 @@ void VulkanContext::createInstance() {
 
     VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
     if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create Vulkan instance! Error code: " + std::to_string(result));
+        if (enableValidationLayers) {
+            std::cout << "Warning: Failed to create Vulkan instance with validation layers (Error " << result 
+                      << "). Retrying without validation layers..." << std::endl;
+            createInfo.enabledLayerCount = 0;
+            result = vkCreateInstance(&createInfo, nullptr, &instance);
+        }
+        if (result != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create Vulkan instance! Error code: " + std::to_string(result));
+        }
     }
     
     std::cout << "Successfully created Vulkan instance!" << std::endl;
@@ -181,7 +199,13 @@ void VulkanContext::createInstance() {
 std::vector<const char*> VulkanContext::getRequiredExtensions() {
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-    return std::vector<const char*>(glfwExtensions, glfwExtensions + glfwExtensionCount);
+    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+
+#ifdef __APPLE__
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+
+    return extensions;
 }
 
 bool VulkanContext::checkValidationLayerSupport() {
@@ -222,6 +246,25 @@ void VulkanContext::pickPhysicalDevice() {
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
     for (const auto& dev : devices) {
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(dev, &deviceProperties);
+        std::cout << "Checking GPU: " << deviceProperties.deviceName << std::endl;
+
+        VkPhysicalDeviceFeatures supportedFeatures;
+        vkGetPhysicalDeviceFeatures(dev, &supportedFeatures);
+
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &features12;
+        vkGetPhysicalDeviceFeatures2(dev, &features2);
+
+        std::cout << "  - shaderInt64: " << (supportedFeatures.shaderInt64 ? "YES" : "NO") << std::endl;
+        std::cout << "  - fragmentStoresAndAtomics: " << (supportedFeatures.fragmentStoresAndAtomics ? "YES" : "NO") << std::endl;
+        std::cout << "  - shaderBufferInt64Atomics: " << (features12.shaderBufferInt64Atomics ? "YES" : "NO") << std::endl;
+        std::cout << "  - drawIndirectCount: " << (features12.drawIndirectCount ? "YES" : "NO") << std::endl;
+
         if (isDeviceSuitable(dev)) {
             physicalDevice = dev;
             break;
@@ -258,7 +301,11 @@ void VulkanContext::createLogicalDevice() {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.multiDrawIndirect = VK_TRUE;
+#ifdef __APPLE__
+    deviceFeatures.geometryShader = VK_FALSE; // MoltenVK / Metal does not support geometry shaders
+#else
     deviceFeatures.geometryShader = VK_TRUE;
+#endif
     deviceFeatures.shaderInt64 = VK_TRUE;
     deviceFeatures.fragmentStoresAndAtomics = VK_TRUE;
 
@@ -268,8 +315,8 @@ void VulkanContext::createLogicalDevice() {
 
     VkPhysicalDeviceVulkan12Features vulkan12Features{};
     vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    vulkan12Features.drawIndirectCount = VK_TRUE;
-    vulkan12Features.shaderBufferInt64Atomics = VK_TRUE;
+    vulkan12Features.drawIndirectCount = drawIndirectCountSupported ? VK_TRUE : VK_FALSE;
+    vulkan12Features.shaderBufferInt64Atomics = shaderInt64AtomicsSupported ? VK_TRUE : VK_FALSE;
     vulkan12Features.pNext = &dynamicRenderingFeatures;
 
     VkPhysicalDeviceSynchronization2Features synchronization2Features{};
@@ -277,14 +324,29 @@ void VulkanContext::createLogicalDevice() {
     synchronization2Features.synchronization2 = VK_TRUE;
     synchronization2Features.pNext = &vulkan12Features;
 
+    std::vector<const char*> enabledExtensions = deviceExtensions;
+    
+    // Check if portability subset is supported by the physical device and enable it if so
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, availableExtensions.data());
+
+    for (const auto& extension : availableExtensions) {
+        if (strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0) {
+            enabledExtensions.push_back("VK_KHR_portability_subset");
+            break;
+        }
+    }
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.pNext = &synchronization2Features;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.ppEnabledExtensionNames = enabledExtensions.data();
     createInfo.enabledLayerCount = 0;
 
     VkResult result = vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
@@ -320,10 +382,15 @@ bool VulkanContext::isDeviceSuitable(VkPhysicalDevice dev) {
     vkGetPhysicalDeviceFeatures2(dev, &features2);
 
     bool featuresSupported = (supportedFeatures.shaderInt64 == VK_TRUE) &&
-                             (supportedFeatures.fragmentStoresAndAtomics == VK_TRUE) &&
-                             (features12.shaderBufferInt64Atomics == VK_TRUE);
+                             (supportedFeatures.fragmentStoresAndAtomics == VK_TRUE);
 
-    return indices.isComplete() && extensionsSupported && swapChainAdequate && featuresSupported;
+    if (indices.isComplete() && extensionsSupported && swapChainAdequate && featuresSupported) {
+        drawIndirectCountSupported = (features12.drawIndirectCount == VK_TRUE);
+        shaderInt64AtomicsSupported = (features12.shaderBufferInt64Atomics == VK_TRUE);
+        return true;
+    }
+
+    return false;
 }
 
 bool VulkanContext::checkDeviceExtensionSupport(VkPhysicalDevice dev) {
@@ -402,6 +469,48 @@ VkSurfaceFormatKHR VulkanContext::chooseSwapSurfaceFormat(const std::vector<VkSu
 }
 
 VkPresentModeKHR VulkanContext::chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
+    // Print all available present modes for diagnostic purposes
+    static bool printed = false;
+    if (!printed) {
+        printed = true;
+        std::cout << "Available present modes:";
+        for (auto mode : availablePresentModes) {
+            switch (mode) {
+                case VK_PRESENT_MODE_IMMEDIATE_KHR:    std::cout << " IMMEDIATE";    break;
+                case VK_PRESENT_MODE_MAILBOX_KHR:      std::cout << " MAILBOX";      break;
+                case VK_PRESENT_MODE_FIFO_KHR:         std::cout << " FIFO";         break;
+                case VK_PRESENT_MODE_FIFO_RELAXED_KHR: std::cout << " FIFO_RELAXED"; break;
+                default:                               std::cout << " OTHER(" << mode << ")"; break;
+            }
+        }
+        std::cout << std::endl;
+    }
+
+    if (!vsyncEnabled) {
+        // Prefer uncapped modes in order: IMMEDIATE > MAILBOX > FIFO_RELAXED
+        for (auto mode : availablePresentModes) {
+            if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+                std::cout << "Presentation Mode: Uncapped (Immediate)" << std::endl;
+                return mode;
+            }
+        }
+        for (auto mode : availablePresentModes) {
+            if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+                std::cout << "Presentation Mode: Triple Buffering (Mailbox)" << std::endl;
+                return mode;
+            }
+        }
+        for (auto mode : availablePresentModes) {
+            if (mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
+                std::cout << "Presentation Mode: Adaptive VSync (FIFO_RELAXED)" << std::endl;
+                return mode;
+            }
+        }
+        std::cout << "Presentation Mode: FIFO (uncapped modes unavailable on this platform)" << std::endl;
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    // VSync on: prefer MAILBOX (smooth, no tearing, low latency) then FIFO
     for (const auto& availablePresentMode : availablePresentModes) {
         if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
             std::cout << "Presentation Mode: Triple Buffering (Mailbox)" << std::endl;
@@ -411,6 +520,7 @@ VkPresentModeKHR VulkanContext::chooseSwapPresentMode(const std::vector<VkPresen
     std::cout << "Presentation Mode: Double Buffering V-Sync (FIFO)" << std::endl;
     return VK_PRESENT_MODE_FIFO_KHR;
 }
+
 
 VkExtent2D VulkanContext::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (capabilities.currentExtent.width != (std::numeric_limits<uint32_t>::max)()) {

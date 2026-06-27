@@ -1,6 +1,8 @@
 #version 450
+#if !VISBUFFER_32BIT
 #extension GL_EXT_shader_atomic_int64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#endif
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -10,9 +12,15 @@ layout(push_constant) uniform HZBPushConstants {
 } pcs;
 
 // Input bindings
+#if VISBUFFER_32BIT
+layout(std430, set = 0, binding = 0) readonly buffer DepthBuffer {
+    uint depthBuffer[];
+};
+#else
 layout(std430, set = 0, binding = 0) readonly buffer VisBuffer {
     uint64_t visBuffer[];
 };
+#endif
 layout(set = 0, binding = 1, r32f) readonly uniform image2D inHzbImg;
 
 // Output binding
@@ -43,12 +51,20 @@ void main() {
         for (int y = sMin.y; y < sMax.y; ++y) {
             for (int x = sMin.x; x < sMax.x; ++x) {
                 uint pixelIndex = uint(y) * uint(pcs.srcSize.x) + uint(x);
+#if VISBUFFER_32BIT
+                uint val = depthBuffer[pixelIndex];
+                float d = 1.0;
+                if (val != 0xFFFFFFFFu) {
+                    d = float(val) / 4294967295.0;
+                }
+#else
                 uint64_t val = visBuffer[pixelIndex];
                 float d = 1.0;
                 if (val != 0xFFFFFFFFFFFFFFFFul) {
                     uint depthInt = uint(val >> 32);
                     d = float(depthInt) / 4294967295.0;
                 }
+#endif
                 maxDepth = max(maxDepth, d);
             }
         }

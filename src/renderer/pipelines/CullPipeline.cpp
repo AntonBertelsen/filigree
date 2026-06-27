@@ -24,7 +24,7 @@ void CullPipeline::createPipeline() {
     VkDevice device = context.getDevice();
 
     // 1. Create Descriptor Set Layout
-    std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
     
     // Binding 0: Input Commands (SSBO)
     bindings[0].binding = 0;
@@ -123,6 +123,13 @@ void CullPipeline::createPipeline() {
     bindings[13].descriptorCount = 1;
     bindings[13].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[13].pImmutableSamplers = nullptr;
+
+    // Binding 14: 32-bit Depth Buffer SSBO (for two-pass software rasterizer mode)
+    bindings[14].binding = 14;
+    bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[14].descriptorCount = 1;
+    bindings[14].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[14].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

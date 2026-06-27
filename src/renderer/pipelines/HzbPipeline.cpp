@@ -12,8 +12,8 @@ HzbPipeline::~HzbPipeline() {
     cleanup();
 }
 
-void HzbPipeline::recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel) {
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+void HzbPipeline::recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel, bool use64Bit) {
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, getPipeline(use64Bit));
 
     VkDescriptorSet ds = descriptorSets[frameIndex][level];
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &ds, 0, nullptr);
@@ -86,27 +86,55 @@ void HzbPipeline::createPipeline() {
         throw std::runtime_error("Failed to create HZB pipeline layout!");
     }
 
-    // 3. Load HZB Compute Shader
-    auto hzbShaderCode = VulkanContext::readFile(SHADERS_DIR "hzb.spv");
-    VkShaderModule hzbShaderModule = context.createShaderModule(hzbShaderCode);
+    // 3. Load and create 32-bit HZB Compute Shader (always supported)
+    {
+        auto hzbShaderCode = VulkanContext::readFile(SHADERS_DIR "hzb_32bit.spv");
+        VkShaderModule hzbShaderModule = context.createShaderModule(hzbShaderCode);
 
-    VkPipelineShaderStageCreateInfo shaderStageInfo{};
-    shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    shaderStageInfo.module = hzbShaderModule;
-    shaderStageInfo.pName = "main";
+        VkPipelineShaderStageCreateInfo shaderStageInfo{};
+        shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        shaderStageInfo.module = hzbShaderModule;
+        shaderStageInfo.pName = "main";
 
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.stage = shaderStageInfo;
+        VkComputePipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.stage = shaderStageInfo;
 
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &computePipeline) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create HZB compute pipeline!");
+        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &computePipeline32) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 32-bit HZB compute pipeline!");
+        }
+
+        vkDestroyShaderModule(device, hzbShaderModule, nullptr);
+        std::cout << "Successfully created 32-bit HZB compute pipeline!" << std::endl;
     }
 
-    vkDestroyShaderModule(device, hzbShaderModule, nullptr);
-    std::cout << "Successfully created HZB compute pipeline!" << std::endl;
+    // 4. Load and create 64-bit HZB Compute Shader (only if supported)
+    if (context.isShaderInt64AtomicsSupported()) {
+        auto hzbShaderCode = VulkanContext::readFile(SHADERS_DIR "hzb.spv");
+        VkShaderModule hzbShaderModule = context.createShaderModule(hzbShaderCode);
+
+        VkPipelineShaderStageCreateInfo shaderStageInfo{};
+        shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        shaderStageInfo.module = hzbShaderModule;
+        shaderStageInfo.pName = "main";
+
+        VkComputePipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.stage = shaderStageInfo;
+
+        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &computePipeline64) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create 64-bit HZB compute pipeline!");
+        }
+
+        vkDestroyShaderModule(device, hzbShaderModule, nullptr);
+        std::cout << "Successfully created 64-bit HZB compute pipeline!" << std::endl;
+    } else {
+        computePipeline64 = VK_NULL_HANDLE;
+    }
 }
 
 void HzbPipeline::createDescriptorPoolAndSets() {
@@ -243,9 +271,14 @@ void HzbPipeline::cleanup() {
         descriptorPool = VK_NULL_HANDLE;
     }
 
-    if (computePipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, computePipeline, nullptr);
-        computePipeline = VK_NULL_HANDLE;
+    if (computePipeline64 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, computePipeline64, nullptr);
+        computePipeline64 = VK_NULL_HANDLE;
+    }
+
+    if (computePipeline32 != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, computePipeline32, nullptr);
+        computePipeline32 = VK_NULL_HANDLE;
     }
 
     if (pipelineLayout != VK_NULL_HANDLE) {

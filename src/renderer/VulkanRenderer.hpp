@@ -3,6 +3,7 @@
 #include "core/VulkanContext.hpp"
 #include "renderer/pipelines/StandardPipeline.hpp"
 #include "renderer/pipelines/CullPipeline.hpp"
+#include "renderer/GpuTimestampPool.hpp"
 #include <memory>
 
 class Engine; // Forward declaration
@@ -40,6 +41,10 @@ public:
 
     VkImageView getHzbImageView(uint32_t frameIndex) const;
     VkBuffer getVisBufferSSBO() const;
+    VkBuffer getDepthBufferSSBO() const;
+
+    // GPU pass timing — read by DebugUI
+    const GpuTimestampPool& getTimestampPool() const { return timestampPool; }
 
 private:
     VulkanContext& context;
@@ -57,6 +62,8 @@ private:
     std::unique_ptr<ResolvePass> resolvePass;
     std::unique_ptr<ForwardPass> forwardPass;
     std::unique_ptr<DebugOverlayPass> debugOverlayPass;
+
+    GpuTimestampPool timestampPool;
 
     void initImGui();
     void cleanupImGui();

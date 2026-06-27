@@ -53,6 +53,11 @@ public:
         PARALLEL = 1
     };
 
+    enum class VisBufferMode {
+        SINGLE_PASS_64BIT = 0,
+        TWO_PASS_32BIT = 1
+    };
+
     Engine();
     ~Engine();
 
@@ -123,6 +128,7 @@ private:
     RasterizerMode rasterizerMode = RasterizerMode::HYBRID;
     HardwarePathMode hwPathMode = HardwarePathMode::DEPTH_TESTED;
     SyncMode syncMode = SyncMode::SEQUENTIAL;
+    VisBufferMode visBufferMode = VisBufferMode::SINGLE_PASS_64BIT;
     bool hzbCullingEnabled = true;
     bool debugVisualiseHzb = false;
     uint32_t debugHzbMipLevel = 0;
@@ -136,6 +142,13 @@ private:
     bool freezeCulling = false;
     glm::vec4 frozenFrustumPlanes[6];
     glm::vec3 frozenCameraPos;
+
+    // GPU optimizations for systems lacking drawIndirectCount (e.g. macOS)
+    bool enableDrawCountOptimization = true;
+
+
+    // VSync / present mode
+    bool vsyncEnabled = true;
 
     // Frame timing and telemetry
     float lastFrameTime = 0.0f;

@@ -18,11 +18,13 @@ public:
     HzbPipeline(const HzbPipeline&) = delete;
     HzbPipeline& operator=(const HzbPipeline&) = delete;
 
-    VkPipeline getPipeline() const { return computePipeline; }
+    VkPipeline getPipeline(bool use64Bit) const { 
+        return use64Bit ? computePipeline64 : computePipeline32; 
+    }
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
     VkDescriptorSet getDescriptorSet(uint32_t frameIndex, uint32_t level) const { return descriptorSets[frameIndex][level]; }
 
-    void recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel);
+    void recordDispatch(VkCommandBuffer cb, uint32_t frameIndex, uint32_t level, int32_t srcWidth, int32_t srcHeight, int32_t srcLevel, bool use64Bit);
 
     void updateDescriptorSets(
         VkBuffer visBufferSSBO,
@@ -37,7 +39,8 @@ private:
     VulkanContext& context;
     VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline computePipeline = VK_NULL_HANDLE;
+    VkPipeline computePipeline64 = VK_NULL_HANDLE;
+    VkPipeline computePipeline32 = VK_NULL_HANDLE;
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSets[2][11] = {}; // 2 frames * 11 levels

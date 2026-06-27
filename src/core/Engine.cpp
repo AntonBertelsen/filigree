@@ -16,6 +16,10 @@
 Engine::Engine() {
     initWindow();
     context = std::make_unique<VulkanContext>(window);
+    if (!context->isShaderInt64AtomicsSupported()) {
+        std::cout << "M1 detected or 64-bit atomics unsupported. Defaulting to 32-bit two-pass visibility buffer mode." << std::endl;
+        visBufferMode = VisBufferMode::TWO_PASS_32BIT;
+    }
     cullPipeline = std::make_unique<CullPipeline>(*context);
     pipeline = std::make_unique<StandardPipeline>(*context, cullPipeline->getDescriptorSetLayout());
     hzbPipeline = std::make_unique<HzbPipeline>(*context);
@@ -148,6 +152,9 @@ static void windowRefreshCallback(GLFWwindow* window) {
 }
 
 void Engine::initWindow() {
+#ifdef __APPLE__
+    glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#endif
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
@@ -163,6 +170,12 @@ void Engine::initWindow() {
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     glfwSetWindowRefreshCallback(window, windowRefreshCallback);
+
+    // Log the actual framebuffer size (important on Retina displays)
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    std::cout << "Window: " << WIDTH << "x" << HEIGHT
+              << " (framebuffer: " << fbWidth << "x" << fbHeight << ")" << std::endl;
 }
 
 void Engine::run() {
@@ -546,7 +559,8 @@ void Engine::updateSceneInstances() {
         gpuScene,
         renderer->getHzbImageView(0),
         renderer->getHzbImageView(1),
-        renderer->getVisBufferSSBO()
+        renderer->getVisBufferSSBO(),
+        renderer->getDepthBufferSSBO()
     );
 }
 

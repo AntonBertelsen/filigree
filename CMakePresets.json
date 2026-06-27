@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Configure Preset",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "/Users/antonbertelsen/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "Vulkan_LIBRARY": "/opt/homebrew/lib/libvulkan.dylib",
+        "Vulkan_INCLUDE_DIR": "/opt/homebrew/include",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ]
+}

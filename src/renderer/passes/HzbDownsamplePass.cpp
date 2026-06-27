@@ -191,9 +191,10 @@ void HzbDownsamplePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32
 
     // Run Level 0 and mip downsampling dispatches ONLY if culling is not frozen
     if (!engine.freezeCulling) {
+        bool use64Bit = (engine.visBufferMode == Engine::VisBufferMode::SINGLE_PASS_64BIT);
         // Run Level 0 downsampling (Read from Depth image -> Write to HZB Level 0)
         VkExtent2D swapExtent = context.getSwapChainExtent();
-        hzbPipeline.recordDispatch(cb, currentFrame, 0, swapExtent.width, swapExtent.height, -1);
+        hzbPipeline.recordDispatch(cb, currentFrame, 0, swapExtent.width, swapExtent.height, -1, use64Bit);
 
         // Run Levels 1 to 10 downsampling (Read from HZB Level L-1 -> Write to HZB Level L)
         for (uint32_t L = 1; L < VulkanContext::HZB_MIP_LEVELS; L++) {
@@ -220,7 +221,7 @@ void HzbDownsamplePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32
 
             uint32_t srcWidth = std::max(1u, VulkanContext::HZB_WIDTH >> (L - 1));
             uint32_t srcHeight = std::max(1u, VulkanContext::HZB_HEIGHT >> (L - 1));
-            hzbPipeline.recordDispatch(cb, currentFrame, L, srcWidth, srcHeight, L - 1);
+            hzbPipeline.recordDispatch(cb, currentFrame, L, srcWidth, srcHeight, L - 1, use64Bit);
         }
     }
 
@@ -270,5 +271,7 @@ void HzbDownsamplePass::updateDescriptorSets() {
             levelViews[f][l] = hzbLevelImageViews[f][l];
         }
     }
-    hzbPipeline.updateDescriptorSets(visBufferPass.getVisBufferSSBO(), levelViews);
+    VkBuffer bufferToBind = context.isShaderInt64AtomicsSupported() ? 
+        visBufferPass.getVisBufferSSBO() : visBufferPass.getDepthBufferSSBO();
+    hzbPipeline.updateDescriptorSets(bufferToBind, levelViews);
 }

@@ -124,6 +124,11 @@ set(SHADER_SPV_OUTPUTS
     "${CMAKE_BINARY_DIR}/bin/shaders/resolve_vert.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/resolve_frag.spv"
     "${CMAKE_BINARY_DIR}/bin/shaders/rasterize.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_32bit_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_32bit_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/resolve_32bit_frag.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/rasterize_32bit.spv"
+    "${CMAKE_BINARY_DIR}/bin/shaders/hzb_32bit.spv"
 )
 
 # Create output shader directory in the build folder
@@ -239,6 +244,42 @@ add_custom_command(
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp" -o "${CMAKE_BINARY_DIR}/bin/shaders/rasterize.spv"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp"
     COMMENT "Compiling Software Rasterizer compute shader to SPIR-V..."
+)
+
+# Custom commands for 32-bit shader variants
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_32bit_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag" -DVISBUFFER_32BIT=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_32bit_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag"
+    COMMENT "Compiling 32-bit VisBuffer fragment shader to SPIR-V..."
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_32bit_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag" -DEARLY_Z=1 -DVISBUFFER_32BIT=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/visbuffer_earlyz_32bit_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/visbuffer.frag"
+    COMMENT "Compiling 32-bit early-Z VisBuffer fragment shader to SPIR-V..."
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/resolve_32bit_frag.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag" -DVISBUFFER_32BIT=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/resolve_32bit_frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/resolve.frag"
+    COMMENT "Compiling 32-bit Resolve fragment shader to SPIR-V..."
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/rasterize_32bit.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp" -DVISBUFFER_32BIT=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/rasterize_32bit.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rasterize.comp"
+    COMMENT "Compiling 32-bit Software Rasterizer compute shader to SPIR-V..."
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/bin/shaders/hzb_32bit.spv"
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hzb.comp" -DVISBUFFER_32BIT=1 -o "${CMAKE_BINARY_DIR}/bin/shaders/hzb_32bit.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hzb.comp"
+    COMMENT "Compiling 32-bit HZB compute shader to SPIR-V..."
 )
 
 # Create a target for shaders that our main executable depends on

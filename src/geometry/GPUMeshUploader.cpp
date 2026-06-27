@@ -229,7 +229,22 @@ void GPUMeshUploader::uploadSceneInstances(
         
         // drawCountBuffer: Alloc size is sizeof(uint32_t), so we can just update it
         uint32_t zero = 0;
-        updateBufferData(scene.drawCountBuffer[i], scene.drawCountAllocation[i], sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &zero, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+        updateBufferData(scene.drawCountBuffer[i], scene.drawCountAllocation[i], sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &zero, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+        
+        // Readback buffer: host-visible copy so the CPU can read the draw count after the fence
+        // Used by the drawIndirectCount fallback path (macOS) to avoid submitting all totalCullTasks draws
+        if (scene.drawCountReadbackBuffer[i] != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(context.getAllocator(), scene.drawCountReadbackBuffer[i], scene.drawCountReadbackAllocation[i]);
+        }
+        context.createBuffer(
+            sizeof(uint32_t),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VMA_MEMORY_USAGE_AUTO,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            scene.drawCountReadbackBuffer[i],
+            scene.drawCountReadbackAllocation[i]
+        );
+        scene.cachedHwDrawCount[i] = scene.totalCullTasks;
         
         struct SoftwareDrawCountInit {
             uint32_t x = 0;
@@ -247,7 +262,8 @@ void GPUMeshUploader::updateDescriptorSets(
     GPUScene& scene,
     VkImageView hzbImageView0,
     VkImageView hzbImageView1,
-    VkBuffer visBufferSSBO
+    VkBuffer visBufferSSBO,
+    VkBuffer depthBufferSSBO
 ) {
     VkDevice device = context.getDevice();
 
@@ -324,7 +340,12 @@ void GPUMeshUploader::updateDescriptorSets(
         softwareDrawCountInfo.offset = 0;
         softwareDrawCountInfo.range = VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 14> writes{};
+        VkDescriptorBufferInfo depthBufferInfo{};
+        depthBufferInfo.buffer = depthBufferSSBO != VK_NULL_HANDLE ? depthBufferSSBO : scene.inputCommandsBuffer;
+        depthBufferInfo.offset = 0;
+        depthBufferInfo.range = VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 15> writes{};
         
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = scene.globalDescriptorSets[i];
@@ -423,6 +444,13 @@ void GPUMeshUploader::updateDescriptorSets(
         writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[13].descriptorCount = 1;
         writes[13].pBufferInfo = &softwareDrawCountInfo;
+
+        writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[14].dstSet = scene.globalDescriptorSets[i];
+        writes[14].dstBinding = 14;
+        writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[14].descriptorCount = 1;
+        writes[14].pBufferInfo = &depthBufferInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }

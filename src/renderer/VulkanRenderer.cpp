@@ -38,6 +38,9 @@ VulkanRenderer::VulkanRenderer(
     debugOverlayPass = std::make_unique<DebugOverlayPass>(context, *boundsPipeline, debugPipeline, *hzbPass);
 
     initImGui();
+    timestampPool.init(context);
+    // Give VisBufferPass access to timestamps for internal HW/SW breakdown
+    visBufferPass->setTimestampPool(&timestampPool);
 }
 
 VulkanRenderer::~VulkanRenderer() {
@@ -96,6 +99,21 @@ void VulkanRenderer::drawFrame(Engine& engine) {
 
     // Only reset fence if we are proceeding with submission
     vkResetFences(device, 1, &currentFence);
+
+    // Read back GPU timestamps from the frame we just waited on
+    uint32_t frameIdx = context.getCurrentFrameIndex();
+    timestampPool.readback(frameIdx);
+
+    // Read back draw count from host-visible buffer for platforms without drawIndirectCount
+    if (!context.isDrawIndirectCountSupported()) {
+        void* mappedData = nullptr;
+        if (vmaMapMemory(context.getAllocator(), engine.gpuScene.drawCountReadbackAllocation[frameIdx], &mappedData) == VK_SUCCESS) {
+            uint32_t count = *static_cast<uint32_t*>(mappedData);
+            engine.gpuScene.cachedHwDrawCount[frameIdx] = count;
+            vmaUnmapMemory(context.getAllocator(), engine.gpuScene.drawCountReadbackAllocation[frameIdx]);
+        }
+    }
+
 
     // 3. Reset command buffer
     VkCommandBuffer cb = context.getCurrentCommandBuffer();
@@ -166,6 +184,9 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
     uint32_t currentFrame = context.getCurrentFrameIndex();
 
+    // Write GPU timestamp at the very start of this frame
+    timestampPool.beginFrame(cb, currentFrame);
+
     // 1. Transition swapchain image and depth image layouts
     VkImageMemoryBarrier2 barriers[2]{};
     
@@ -210,6 +231,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
     if (engine.geometryPipeline == Engine::GeometryPipeline::NANITE) {
         cullPass->record(cb, currentFrame, imageIndex, engine);
     }
+    timestampPool.write(cb, TS_CULL_END);
 
     // 3. Shading Path: FORWARD vs DEFERRED
     if (engine.shadingPath == Engine::ShadingPath::FORWARD) {
@@ -244,6 +266,10 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
         forwardPass->record(cb, currentFrame, imageIndex, engine);
 
         vkCmdEndRendering(cb);
+        // Forward path has no SW rasterizer; stamp both as the same point
+        timestampPool.write(cb, TS_SW_RASTER_END);
+        timestampPool.write(cb, TS_HW_RASTER_END);
+        timestampPool.write(cb, TS_RESOLVE_END);
     } else {
         // --- DEFERRED SHADING PATH (VisBuffer + Resolve) ---
         visBufferPass->record(cb, currentFrame, imageIndex, engine);
@@ -277,13 +303,16 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
         resolvePass->record(cb, currentFrame, imageIndex, engine);
 
         vkCmdEndRendering(cb);
+        timestampPool.write(cb, TS_RESOLVE_END);
     }
 
     // 4. Downsample depth buffer to HZB
     hzbPass->record(cb, currentFrame, imageIndex, engine);
+    timestampPool.write(cb, TS_HZB_END);
 
     // 5. Draw debug visualizers (bounding spheres, HZB mip overlay)
     debugOverlayPass->record(cb, currentFrame, imageIndex, engine);
+    timestampPool.write(cb, TS_DEBUG_END);
 
     // 5.5. Render ImGui UI on top
     VkRenderingAttachmentInfo imguiColorAttachment{};
@@ -332,6 +361,8 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
     vkCmdPipelineBarrier2(cb, &presentDependencyInfo);
 
+    timestampPool.write(cb, TS_FRAME_END);
+
     if (vkEndCommandBuffer(cb) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
@@ -339,6 +370,10 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex
 
 VkBuffer VulkanRenderer::getVisBufferSSBO() const {
     return visBufferPass->getVisBufferSSBO();
+}
+
+VkBuffer VulkanRenderer::getDepthBufferSSBO() const {
+    return visBufferPass->getDepthBufferSSBO();
 }
 
 void VulkanRenderer::initImGui() {

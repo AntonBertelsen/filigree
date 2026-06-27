@@ -1,14 +1,22 @@
 #version 450
+#if !VISBUFFER_32BIT
 #extension GL_EXT_shader_atomic_int64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#endif
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 // Bindings
+#if VISBUFFER_32BIT
+layout(std430, set = 0, binding = 10) readonly buffer VisBuffer {
+    uint visBuffer[];
+};
+#else
 layout(std430, set = 0, binding = 10) readonly buffer VisBuffer {
     uint64_t visBuffer[];
 };
+#endif
 
 struct MeshVertex {
     float px, py, pz;
@@ -76,16 +84,21 @@ uint getIndex(uint indexOffset) {
 void main() {
     // 1. Read VisBuffer value at current pixel coordinate
     uint pixelIndex = uint(gl_FragCoord.y) * uint(pcs.viewportSize.x) + uint(gl_FragCoord.x);
+
+#if VISBUFFER_32BIT
+    uint payload = visBuffer[pixelIndex];
+    if (payload == 0xFFFFFFFFu) {
+        outColor = vec4(0.15, 0.15, 0.18, 1.0); // Nice dark grey background
+        return;
+    }
+#else
     uint64_t packedVal64 = visBuffer[pixelIndex];
-    
-    // Check if background (clear value 0xFFFFFFFFFFFFFFFF)
     if (packedVal64 == 0xFFFFFFFFFFFFFFFFul) {
         outColor = vec4(0.15, 0.15, 0.18, 1.0); // Nice dark grey background
         return;
     }
-    
-    // Unpack payload from low 32 bits of packedVal64
     uint payload = uint(packedVal64 & 0xFFFFFFFFu);
+#endif
     
     uint instIdx;
     uint meshletID;

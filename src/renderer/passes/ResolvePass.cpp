@@ -21,7 +21,8 @@ void ResolvePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t ima
     scissor.extent = context.getSwapChainExtent();
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
-    resolvePipeline.bind(cb);
+    bool use64Bit = (engine.visBufferMode == Engine::VisBufferMode::SINGLE_PASS_64BIT);
+    resolvePipeline.bind(cb, use64Bit);
 
     float aspect = static_cast<float>(context.getSwapChainExtent().width) / static_cast<float>(context.getSwapChainExtent().height);
     glm::mat4 proj = engine.cameraNode->getProjectionMatrix(aspect);

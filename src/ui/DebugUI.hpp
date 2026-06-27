@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include "renderer/GpuTimestampPool.hpp"
 
 class Engine;
 
@@ -20,6 +21,7 @@ private:
     void drawPerformanceOverlay(Engine& engine);
     void drawControlPanel(Engine& engine);
     void drawBenchmarkPanel(Engine& engine, float deltaTime);
+    void drawGpuTimingPanel(Engine& engine);
     void runBenchmarkCycle(Engine& engine, float deltaTime);
 
     // Benchmark state
