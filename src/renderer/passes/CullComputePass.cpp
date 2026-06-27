@@ -66,7 +66,7 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     cullPcs.maxDrawCount = engine.gpuScene.totalCullTasks;
     cullPcs.rasterizerMode = static_cast<uint32_t>(engine.rasterizerMode);
     cullPcs.sizeThreshold = engine.sizeThreshold;
-    cullPcs.pad0 = 0.0f;
+    cullPcs.isInstancedDraw = context.isDrawIndirectCountSupported() ? 0 : 1;
     cullPcs.pad1 = 0.0f;
 
     // Reset draw count atomic buffer and software draw count atomic buffer
@@ -99,32 +99,43 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     fillBarriers.push_back(barrier1);
 
     if (!context.isDrawIndirectCountSupported()) {
+        // 1. Initialize template command for instanced HW draw fallback
+        VkDrawIndirectCommand initCmd{};
+        initCmd.vertexCount = 378; // 126 triangles * 3 vertices
+        initCmd.instanceCount = 0;
+        initCmd.firstVertex = 0;
+        initCmd.firstInstance = 0;
+        vkCmdUpdateBuffer(cb, engine.gpuScene.culledIndirectBuffer[currentFrame], 0, sizeof(VkDrawIndirectCommand), &initCmd);
+
+        // 2. Clear Software Indirect Buffer (still needed as-is)
         VkDeviceSize size = engine.gpuScene.totalCullTasks * sizeof(VkDrawIndexedIndirectCommand);
         if (size > 0) {
-            vkCmdFillBuffer(cb, engine.gpuScene.culledIndirectBuffer[currentFrame], 0, size, 0);
             vkCmdFillBuffer(cb, engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame], 0, size, 0);
+        }
 
-            VkBufferMemoryBarrier2 barrier2{};
-            barrier2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier2.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-            barrier2.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            barrier2.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier2.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-            barrier2.buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
-            barrier2.offset = 0;
-            barrier2.size = size;
-            fillBarriers.push_back(barrier2);
+        // 3. Barriers for HW Indirect template and SW Indirect buffer
+        VkBufferMemoryBarrier2 barrierHWIndirect{};
+        barrierHWIndirect.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        barrierHWIndirect.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrierHWIndirect.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrierHWIndirect.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrierHWIndirect.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrierHWIndirect.buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
+        barrierHWIndirect.offset = 0;
+        barrierHWIndirect.size = sizeof(VkDrawIndirectCommand);
+        fillBarriers.push_back(barrierHWIndirect);
 
-            VkBufferMemoryBarrier2 barrier3{};
-            barrier3.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier3.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-            barrier3.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            barrier3.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier3.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-            barrier3.buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
-            barrier3.offset = 0;
-            barrier3.size = size;
-            fillBarriers.push_back(barrier3);
+        if (size > 0) {
+            VkBufferMemoryBarrier2 barrierSWIndirect{};
+            barrierSWIndirect.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            barrierSWIndirect.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrierSWIndirect.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrierSWIndirect.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrierSWIndirect.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            barrierSWIndirect.buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
+            barrierSWIndirect.offset = 0;
+            barrierSWIndirect.size = size;
+            fillBarriers.push_back(barrierSWIndirect);
         }
     }
 
@@ -154,79 +165,141 @@ void CullComputePass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t
     uint32_t groupCount = (engine.gpuScene.totalCullTasks + 63) / 64;
     vkCmdDispatch(cb, groupCount, 1, 1);
 
-    // Synchronization Barrier: Wait for compute writes to finish before graphics draws / compute rasterizer reads
-    VkBufferMemoryBarrier2 syncBarriers[4]{};
-    
-    // 1. Hardware Indirect Commands
-    syncBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    syncBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    syncBarriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    syncBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-    syncBarriers[0].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-    syncBarriers[0].buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
-    syncBarriers[0].offset = 0;
-    syncBarriers[0].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
-
-    // 2. Hardware Draw Count
-    syncBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    syncBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    syncBarriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    syncBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
-    syncBarriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT;
-    syncBarriers[1].buffer = engine.gpuScene.drawCountBuffer[currentFrame];
-    syncBarriers[1].offset = 0;
-    syncBarriers[1].size = sizeof(uint32_t);
-
-    // 3. Software Indirect Commands (read as SSBO in software rasterizer compute shader)
-    syncBarriers[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    syncBarriers[2].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    syncBarriers[2].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    syncBarriers[2].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    syncBarriers[2].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-    syncBarriers[2].buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
-    syncBarriers[2].offset = 0;
-    syncBarriers[2].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
-
-    // 4. Software Draw Count (read as indirect dispatch parameters in software rasterizer)
-    syncBarriers[3].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    syncBarriers[3].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    syncBarriers[3].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    syncBarriers[3].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-    syncBarriers[3].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-    syncBarriers[3].buffer = engine.gpuScene.softwareDrawCountBuffer[currentFrame];
-    syncBarriers[3].offset = 0;
-    syncBarriers[3].size = sizeof(uint32_t) * 3; // sizeof(VkDispatchIndirectCommand)
-
-    VkDependencyInfo drawDependency{};
-    drawDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    drawDependency.bufferMemoryBarrierCount = 4;
-    drawDependency.pBufferMemoryBarriers = syncBarriers;
-
-    vkCmdPipelineBarrier2(cb, &drawDependency);
-
-    // Copy draw count to readback buffer for CPU readback on platforms without drawIndirectCount
     if (!context.isDrawIndirectCountSupported()) {
+        // Fallback Instanced MDI copy: drawCountBuffer -> culledIndirectBuffer.instanceCount (offset 4)
+        VkBufferMemoryBarrier2 copyBarriers[3]{};
+        
+        // drawCountBuffer: Compute Write -> Transfer Read
+        copyBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        copyBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        copyBarriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        copyBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        copyBarriers[0].dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        copyBarriers[0].buffer = engine.gpuScene.drawCountBuffer[currentFrame];
+        copyBarriers[0].offset = 0;
+        copyBarriers[0].size = sizeof(uint32_t);
+
+        // culledIndirectBuffer: Compute Access -> Transfer Write
+        copyBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        copyBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        copyBarriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
+        copyBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        copyBarriers[1].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        copyBarriers[1].buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
+        copyBarriers[1].offset = 0;
+        copyBarriers[1].size = sizeof(VkDrawIndirectCommand);
+
+        // drawnMeshletsBuffer: Compute Write -> Vertex/Compute Shader Read
+        copyBarriers[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        copyBarriers[2].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        copyBarriers[2].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        copyBarriers[2].dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        copyBarriers[2].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        copyBarriers[2].buffer = engine.gpuScene.drawnMeshletsBuffer[currentFrame];
+        copyBarriers[2].offset = 0;
+        copyBarriers[2].size = engine.gpuScene.totalCullTasks * sizeof(uint32_t);
+
+        VkDependencyInfo copyDependency{};
+        copyDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        copyDependency.bufferMemoryBarrierCount = 3;
+        copyDependency.pBufferMemoryBarriers = copyBarriers;
+        vkCmdPipelineBarrier2(cb, &copyDependency);
+
+        // Copy dynamic count to instanceCount field of the draw template
         VkBufferCopy copyRegion{};
         copyRegion.srcOffset = 0;
-        copyRegion.dstOffset = 0;
+        copyRegion.dstOffset = offsetof(VkDrawIndirectCommand, instanceCount);
         copyRegion.size = sizeof(uint32_t);
-        vkCmdCopyBuffer(cb, engine.gpuScene.drawCountBuffer[currentFrame], engine.gpuScene.drawCountReadbackBuffer[currentFrame], 1, &copyRegion);
+        vkCmdCopyBuffer(cb, engine.gpuScene.drawCountBuffer[currentFrame], engine.gpuScene.culledIndirectBuffer[currentFrame], 1, &copyRegion);
 
-        VkBufferMemoryBarrier2 hostBarrier{};
-        hostBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        hostBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        hostBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        hostBarrier.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
-        hostBarrier.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
-        hostBarrier.buffer = engine.gpuScene.drawCountReadbackBuffer[currentFrame];
-        hostBarrier.offset = 0;
-        hostBarrier.size = sizeof(uint32_t);
+        // Transition culledIndirectBuffer to indirect read stage
+        VkBufferMemoryBarrier2 drawBarrier{};
+        drawBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        drawBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        drawBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        drawBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        drawBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        drawBarrier.buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
+        drawBarrier.offset = 0;
+        drawBarrier.size = sizeof(VkDrawIndirectCommand);
 
-        VkDependencyInfo hostDependency{};
-        hostDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        hostDependency.bufferMemoryBarrierCount = 1;
-        hostDependency.pBufferMemoryBarriers = &hostBarrier;
-        vkCmdPipelineBarrier2(cb, &hostDependency);
+        VkDependencyInfo drawDependencyInfo{};
+        drawDependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        drawDependencyInfo.bufferMemoryBarrierCount = 1;
+        drawDependencyInfo.pBufferMemoryBarriers = &drawBarrier;
+        vkCmdPipelineBarrier2(cb, &drawDependencyInfo);
+
+        // Transition software buffers (Dispatch Indirect)
+        VkBufferMemoryBarrier2 swBarriers[2]{};
+        
+        swBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        swBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        swBarriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        swBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        swBarriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        swBarriers[0].buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
+        swBarriers[0].offset = 0;
+        swBarriers[0].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
+
+        swBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        swBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        swBarriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        swBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        swBarriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        swBarriers[1].buffer = engine.gpuScene.softwareDrawCountBuffer[currentFrame];
+        swBarriers[1].offset = 0;
+        swBarriers[1].size = sizeof(uint32_t) * 3;
+
+        VkDependencyInfo swDependency{};
+        swDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        swDependency.bufferMemoryBarrierCount = 2;
+        swDependency.pBufferMemoryBarriers = swBarriers;
+        vkCmdPipelineBarrier2(cb, &swDependency);
+    } else {
+        // Native path: Standard multi-draw indirect barriers
+        VkBufferMemoryBarrier2 syncBarriers[4]{};
+        
+        syncBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        syncBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        syncBarriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        syncBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        syncBarriers[0].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        syncBarriers[0].buffer = engine.gpuScene.culledIndirectBuffer[currentFrame];
+        syncBarriers[0].offset = 0;
+        syncBarriers[0].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
+
+        syncBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        syncBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        syncBarriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        syncBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+        syncBarriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT;
+        syncBarriers[1].buffer = engine.gpuScene.drawCountBuffer[currentFrame];
+        syncBarriers[1].offset = 0;
+        syncBarriers[1].size = sizeof(uint32_t);
+
+        syncBarriers[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        syncBarriers[2].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        syncBarriers[2].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        syncBarriers[2].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        syncBarriers[2].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        syncBarriers[2].buffer = engine.gpuScene.culledSoftwareIndirectBuffer[currentFrame];
+        syncBarriers[2].offset = 0;
+        syncBarriers[2].size = sizeof(VkDrawIndexedIndirectCommand) * engine.gpuScene.totalCullTasks;
+
+        syncBarriers[3].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        syncBarriers[3].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        syncBarriers[3].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        syncBarriers[3].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        syncBarriers[3].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        syncBarriers[3].buffer = engine.gpuScene.softwareDrawCountBuffer[currentFrame];
+        syncBarriers[3].offset = 0;
+        syncBarriers[3].size = sizeof(uint32_t) * 3;
+
+        VkDependencyInfo drawDependency{};
+        drawDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        drawDependency.bufferMemoryBarrierCount = 4;
+        drawDependency.pBufferMemoryBarriers = syncBarriers;
+        vkCmdPipelineBarrier2(cb, &drawDependency);
     }
 }
 

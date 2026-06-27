@@ -143,10 +143,6 @@ private:
     glm::vec4 frozenFrustumPlanes[6];
     glm::vec3 frozenCameraPos;
 
-    // GPU optimizations for systems lacking drawIndirectCount (e.g. macOS)
-    bool enableDrawCountOptimization = true;
-
-
     // VSync / present mode
     bool vsyncEnabled = true;
 

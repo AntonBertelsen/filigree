@@ -29,7 +29,10 @@ void ForwardPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t ima
 
     StandardPipeline::StandardPushConstants standardPcs{};
     standardPcs.viewProj = viewProj;
-    standardPcs.isNaniteMode = (engine.geometryPipeline == Engine::GeometryPipeline::NANITE) ? 1 : 0;
+    standardPcs.isNaniteMode = 0;
+    if (engine.geometryPipeline == Engine::GeometryPipeline::NANITE) {
+        standardPcs.isNaniteMode = context.isDrawIndirectCountSupported() ? 1 : 2;
+    }
     standardPipeline.pushConstants(cb, standardPcs);
 
     // Bind global descriptor set
@@ -48,10 +51,10 @@ void ForwardPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t ima
         if (engine.gpuScene.totalCullTasks > 0) {
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cb, 0, 1, &engine.gpuScene.vertexBuffer, offsets);
-            vkCmdBindIndexBuffer(cb, engine.gpuScene.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
             // Draw via Multi-Draw Indirect Count or fallback
             if (context.isDrawIndirectCountSupported()) {
+                vkCmdBindIndexBuffer(cb, engine.gpuScene.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
                 vkCmdDrawIndexedIndirectCount(
                     cb,
                     engine.gpuScene.culledIndirectBuffer[currentFrame],
@@ -62,12 +65,13 @@ void ForwardPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t ima
                     sizeof(VkDrawIndexedIndirectCommand)
                 );
             } else {
-                vkCmdDrawIndexedIndirect(
+                // Instanced MDI fallback (no drawIndirectCount support)
+                vkCmdDrawIndirect(
                     cb,
                     engine.gpuScene.culledIndirectBuffer[currentFrame],
                     0,
-                    engine.gpuScene.totalCullTasks,
-                    sizeof(VkDrawIndexedIndirectCommand)
+                    1, // exactly 1 command template
+                    sizeof(VkDrawIndirectCommand)
                 );
             }
         }

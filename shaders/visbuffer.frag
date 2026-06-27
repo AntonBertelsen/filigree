@@ -30,7 +30,7 @@ layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
 
 void main() {
     uint payload;
-    if (pcs.isNaniteMode == 1) {
+    if (pcs.isNaniteMode >= 1) {
         payload = inVisPayload | (gl_PrimitiveID & 0xFFu);
     } else {
         payload = inVisPayload | (gl_PrimitiveID & 0xFFFFFu);

@@ -408,6 +408,9 @@ void Engine::cleanup() {
             if (gpuScene.visibilityBuffer[i] != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, gpuScene.visibilityBuffer[i], gpuScene.visibilityAllocation[i]);
             }
+            if (gpuScene.drawnMeshletsBuffer[i] != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, gpuScene.drawnMeshletsBuffer[i], gpuScene.drawnMeshletsAllocation[i]);
+            }
         }
 
         if (gpuScene.hzbSampler != VK_NULL_HANDLE) {

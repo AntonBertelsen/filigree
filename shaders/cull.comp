@@ -75,6 +75,10 @@ layout(std430, set = 0, binding = 13) buffer SoftwareDrawCount {
     uint softwareCountZ;
 };
 
+layout(std430, set = 0, binding = 15) writeonly buffer DrawnMeshlets {
+    uint drawnMeshlets[];
+};
+
 // Push Constants
 layout(push_constant) uniform CullPushConstants {
     mat4 viewProj;
@@ -92,7 +96,7 @@ layout(push_constant) uniform CullPushConstants {
     uint lodEnabled;
     uint rasterizerMode; // 0 = HW, 1 = SW, 2 = HYBRID
     float sizeThreshold;
-    float pad0;
+    uint isInstancedDraw;
     float pad1;
 } pcs;
 
@@ -312,7 +316,10 @@ void main() {
             visibilities[gID] = 1;
             
             uint outIndex = atomicAdd(count, 1);
-            outputs[outIndex] = cmd;
+            if (pcs.isInstancedDraw == 0) {
+                outputs[outIndex] = cmd;
+            }
+            drawnMeshlets[outIndex] = (instIdx << 16) | clustIdx;
         }
     } else {
         // Write culling status feedback for bounds visualizer

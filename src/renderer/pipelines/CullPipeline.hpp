@@ -21,7 +21,7 @@ struct CullPushConstants {
     uint32_t lodEnabled;
     uint32_t rasterizerMode; // 0 = HW, 1 = SW, 2 = HYBRID
     float sizeThreshold;      // area threshold for software rasterization
-    float pad0;
+    uint32_t isInstancedDraw;
     float pad1;
 };
 

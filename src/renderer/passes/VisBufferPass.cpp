@@ -368,7 +368,10 @@ void VisBufferPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t i
 
     VisBufferPipeline::VisBufferPushConstants visPcs{};
     visPcs.viewProj = viewProj;
-    visPcs.isNaniteMode = (engine.geometryPipeline == Engine::GeometryPipeline::NANITE) ? 1 : 0;
+    visPcs.isNaniteMode = 0;
+    if (engine.geometryPipeline == Engine::GeometryPipeline::NANITE) {
+        visPcs.isNaniteMode = context.isDrawIndirectCountSupported() ? 1 : 2;
+    }
     visPcs.viewportWidth = static_cast<float>(extent.width);
     visPcs.viewportHeight = static_cast<float>(extent.height);
 
@@ -393,9 +396,9 @@ void VisBufferPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t i
             if (engine.gpuScene.totalCullTasks > 0) {
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(cb, 0, 1, &engine.gpuScene.vertexBuffer, offsets);
-                vkCmdBindIndexBuffer(cb, engine.gpuScene.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
                 if (context.isDrawIndirectCountSupported()) {
+                    vkCmdBindIndexBuffer(cb, engine.gpuScene.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
                     vkCmdDrawIndexedIndirectCount(
                         cb,
                         engine.gpuScene.culledIndirectBuffer[currentFrame],
@@ -406,26 +409,16 @@ void VisBufferPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t i
                         sizeof(VkDrawIndexedIndirectCommand)
                     );
                 } else {
-                    // Fallback indirect draw with optimized limit (no drawIndirectCount support)
-                    uint32_t drawCount = engine.gpuScene.totalCullTasks;
-                    if (engine.enableDrawCountOptimization) {
-                        uint32_t cachedCount = engine.gpuScene.cachedHwDrawCount[currentFrame];
-                        if (cachedCount > 0) {
-                            // Apply a 30% margin + 256 padding to absorb camera movement, clamped to totalCullTasks
-                            drawCount = std::min(engine.gpuScene.totalCullTasks, static_cast<uint32_t>(cachedCount * 1.30f) + 256);
-                        }
-                    }
-                    vkCmdDrawIndexedIndirect(
+                    // Instanced MDI fallback (no drawIndirectCount support)
+                    // We execute a single instanced non-indexed draw command
+                    vkCmdDrawIndirect(
                         cb,
                         engine.gpuScene.culledIndirectBuffer[currentFrame],
                         0,
-                        drawCount,
-                        sizeof(VkDrawIndexedIndirectCommand)
+                        1, // exactly 1 command template
+                        sizeof(VkDrawIndirectCommand)
                     );
                 }
-
-
-
             }
         } else {
             if (engine.gpuScene.traditionalIndirectBuffer[currentFrame] != VK_NULL_HANDLE) {

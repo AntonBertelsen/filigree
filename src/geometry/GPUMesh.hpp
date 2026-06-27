@@ -43,11 +43,6 @@ struct GPUScene {
     VkBuffer drawCountBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     VmaAllocation drawCountAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 
-    // Host-visible copy of drawCountBuffer for CPU readback on the fallback (no drawIndirectCount) path
-    VkBuffer drawCountReadbackBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VmaAllocation drawCountReadbackAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    // Latched last-frame draw count used by the indirect draw fallback
-    uint32_t cachedHwDrawCount[2] = { 0, 0 };
     VkBuffer culledSoftwareIndirectBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     VmaAllocation culledSoftwareIndirectAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     
@@ -56,6 +51,9 @@ struct GPUScene {
     
     VkBuffer visibilityBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     VmaAllocation visibilityAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+
+    VkBuffer drawnMeshletsBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VmaAllocation drawnMeshletsAllocation[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 
     // Culling task buffers
     VkBuffer cullTasksBuffer[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };

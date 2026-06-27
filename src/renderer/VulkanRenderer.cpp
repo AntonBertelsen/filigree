@@ -104,16 +104,6 @@ void VulkanRenderer::drawFrame(Engine& engine) {
     uint32_t frameIdx = context.getCurrentFrameIndex();
     timestampPool.readback(frameIdx);
 
-    // Read back draw count from host-visible buffer for platforms without drawIndirectCount
-    if (!context.isDrawIndirectCountSupported()) {
-        void* mappedData = nullptr;
-        if (vmaMapMemory(context.getAllocator(), engine.gpuScene.drawCountReadbackAllocation[frameIdx], &mappedData) == VK_SUCCESS) {
-            uint32_t count = *static_cast<uint32_t*>(mappedData);
-            engine.gpuScene.cachedHwDrawCount[frameIdx] = count;
-            vmaUnmapMemory(context.getAllocator(), engine.gpuScene.drawCountReadbackAllocation[frameIdx]);
-        }
-    }
-
 
     // 3. Reset command buffer
     VkCommandBuffer cb = context.getCurrentCommandBuffer();

@@ -208,12 +208,6 @@ void DebugUI::drawControlPanel(Engine& engine) {
         ImGui::Checkbox("HZB Occlusion Culling", &engine.hzbCullingEnabled);
         ImGui::Checkbox("Freeze Culling Frustum", &engine.freezeCulling);
 
-        if (!engine.context->isDrawIndirectCountSupported()) {
-            ImGui::Checkbox("Fallback DrawCount Optimization", &engine.enableDrawCountOptimization);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Limits fallback indirect draw count via GPU-to-CPU readback to avoid driver overhead from empty commands on macOS.");
-            }
-        }
     }
 
 

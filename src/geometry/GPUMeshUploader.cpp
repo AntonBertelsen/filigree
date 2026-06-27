@@ -184,6 +184,7 @@ void GPUMeshUploader::uploadSceneInstances(
     VkDeviceSize cullTasksBufferSize = cullTasks.size() * sizeof(CullTask);
     VkDeviceSize indirectBufferSize = cullTasks.size() * sizeof(VkDrawIndexedIndirectCommand);
     VkDeviceSize visibilityBufferSize = cullTasks.size() * sizeof(uint32_t);
+    VkDeviceSize drawnMeshletsBufferSize = cullTasks.size() * sizeof(uint32_t);
     VkDeviceSize tradIndirectBufferSize = traditionalCommands.size() * sizeof(VkDrawIndexedIndirectCommand);
 
     auto updateBufferData = [&](VkBuffer& buffer, VmaAllocation& allocation, VkDeviceSize size, VkBufferUsageFlags usage, const void* data, VmaAllocationCreateFlags flags) {
@@ -231,21 +232,6 @@ void GPUMeshUploader::uploadSceneInstances(
         uint32_t zero = 0;
         updateBufferData(scene.drawCountBuffer[i], scene.drawCountAllocation[i], sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &zero, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
         
-        // Readback buffer: host-visible copy so the CPU can read the draw count after the fence
-        // Used by the drawIndirectCount fallback path (macOS) to avoid submitting all totalCullTasks draws
-        if (scene.drawCountReadbackBuffer[i] != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(context.getAllocator(), scene.drawCountReadbackBuffer[i], scene.drawCountReadbackAllocation[i]);
-        }
-        context.createBuffer(
-            sizeof(uint32_t),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_AUTO,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            scene.drawCountReadbackBuffer[i],
-            scene.drawCountReadbackAllocation[i]
-        );
-        scene.cachedHwDrawCount[i] = scene.totalCullTasks;
-        
         struct SoftwareDrawCountInit {
             uint32_t x = 0;
             uint32_t y = 1;
@@ -254,6 +240,7 @@ void GPUMeshUploader::uploadSceneInstances(
         updateBufferData(scene.softwareDrawCountBuffer[i], scene.softwareDrawCountAllocation[i], sizeof(SoftwareDrawCountInit), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &swInit, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
 
         resizeDeviceBuffer(scene.visibilityBuffer[i], scene.visibilityAllocation[i], visibilityBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        resizeDeviceBuffer(scene.drawnMeshletsBuffer[i], scene.drawnMeshletsAllocation[i], drawnMeshletsBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     }
 }
 
@@ -345,7 +332,12 @@ void GPUMeshUploader::updateDescriptorSets(
         depthBufferInfo.offset = 0;
         depthBufferInfo.range = VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 15> writes{};
+        VkDescriptorBufferInfo drawnMeshletsInfo{};
+        drawnMeshletsInfo.buffer = scene.drawnMeshletsBuffer[i] != VK_NULL_HANDLE ? scene.drawnMeshletsBuffer[i] : scene.inputCommandsBuffer;
+        drawnMeshletsInfo.offset = 0;
+        drawnMeshletsInfo.range = VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 16> writes{};
         
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = scene.globalDescriptorSets[i];
@@ -451,6 +443,13 @@ void GPUMeshUploader::updateDescriptorSets(
         writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[14].descriptorCount = 1;
         writes[14].pBufferInfo = &depthBufferInfo;
+
+        writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[15].dstSet = scene.globalDescriptorSets[i];
+        writes[15].dstBinding = 15;
+        writes[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[15].descriptorCount = 1;
+        writes[15].pBufferInfo = &drawnMeshletsInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
