@@ -127,7 +127,7 @@ private:
     ShadingPath shadingPath = ShadingPath::DEFERRED;
     RasterizerMode rasterizerMode = RasterizerMode::HYBRID;
     HardwarePathMode hwPathMode = HardwarePathMode::DEPTH_TESTED;
-    SyncMode syncMode = SyncMode::SEQUENTIAL;
+    SyncMode syncMode = SyncMode::PARALLEL;
     VisBufferMode visBufferMode = VisBufferMode::SINGLE_PASS_64BIT;
     bool hzbCullingEnabled = true;
     bool debugVisualiseHzb = false;

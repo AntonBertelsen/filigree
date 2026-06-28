@@ -16,11 +16,15 @@ layout(push_constant) uniform PushConstants {
     uint isNaniteMode;
     float viewportWidth;
     float viewportHeight;
+    uint passIndex;
 } pcs;
 
 #if VISBUFFER_32BIT
 layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
     uint visBuffer[];
+};
+layout(std430, set = 0, binding = 14) buffer DepthBuffer {
+    uint depthBuffer[];
 };
 #else
 layout(std430, set = 0, binding = 10) writeonly buffer VisBuffer {
@@ -39,8 +43,14 @@ void main() {
     uint pixelIndex = uint(gl_FragCoord.y) * uint(pcs.viewportWidth) + uint(gl_FragCoord.x);
 
 #if VISBUFFER_32BIT
-    // In 32-bit hardware pass, we use EQUAL depth testing so only the winning fragment runs.
-    visBuffer[pixelIndex] = payload;
+    uint depthInt = uint(gl_FragCoord.z * 4294967295.0);
+    if (pcs.passIndex == 0) {
+        atomicMin(depthBuffer[pixelIndex], depthInt);
+    } else {
+        if (depthBuffer[pixelIndex] == depthInt) {
+            visBuffer[pixelIndex] = payload;
+        }
+    }
 #else
     uint depthInt = uint(gl_FragCoord.z * 4294967295.0);
     uint64_t packedVal = (uint64_t(depthInt) << 32) | uint64_t(payload);

@@ -454,24 +454,42 @@ void VisBufferPass::record(VkCommandBuffer cb, uint32_t currentFrame, uint32_t i
         if (timestampPool) timestampPool->write(cb, TS_HW_RASTER_END);
     } else {
         // --- 32-bit Two Pass ---
-        // Pass 1: Depth-Only rendering
+        // Pass 1: Depth write to depthBufferSSBO
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
         vkCmdBeginRendering(cb, &renderingInfo);
-        recordHardwareDraws(visBufferPipeline.getDepthOnlyPipeline());
+        visPcs.passIndex = 0;
+        visBufferPipeline.pushConstants(cb, visPcs);
+        VkPipeline depthPipeline = visBufferPipeline.getGraphicsPipeline32(false);
+        recordHardwareDraws(depthPipeline);
         vkCmdEndRendering(cb);
 
-        // Pass 2: Visibility Payload rendering
-        // Load depth values from Pass 1, EQUAL comparison, depth write DISABLED
+        // Barrier: wait for fragment shader depth writes to finish
+        VkBufferMemoryBarrier2 depthBarrier{};
+        depthBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        depthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        depthBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        depthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        depthBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        depthBarrier.buffer = depthBufferSSBO;
+        depthBarrier.offset = 0;
+        depthBarrier.size = static_cast<VkDeviceSize>(extent.width) * extent.height * sizeof(uint32_t);
+
+        VkDependencyInfo depthDependency{};
+        depthDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        depthDependency.bufferMemoryBarrierCount = 1;
+        depthDependency.pBufferMemoryBarriers = &depthBarrier;
+        vkCmdPipelineBarrier2(cb, &depthDependency);
+
+        // Pass 2: Visibility Payload rendering (checks depthBufferSSBO and writes payload)
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 
         vkCmdBeginRendering(cb, &renderingInfo);
-        bool useDepthTested = (engine.geometryPipeline == Engine::GeometryPipeline::NANITE)
-            ? (engine.hwPathMode == Engine::HardwarePathMode::DEPTH_TESTED)
-            : true;
-        VkPipeline pipelineToBind = visBufferPipeline.getGraphicsPipeline32(useDepthTested);
-        recordHardwareDraws(pipelineToBind);
+        visPcs.passIndex = 1;
+        visBufferPipeline.pushConstants(cb, visPcs);
+        VkPipeline payloadPipeline = visBufferPipeline.getGraphicsPipeline32(false);
+        recordHardwareDraws(payloadPipeline);
         vkCmdEndRendering(cb);
         if (timestampPool) timestampPool->write(cb, TS_HW_RASTER_END);
     }
